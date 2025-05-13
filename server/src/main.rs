@@ -73,25 +73,38 @@ impl LobbyActor {
         match msg {
             LobbyActorMessage::ProcessEvent {
                 client_id,
-                event_data,
+                event_data, // This now contains "COMMAND message_payload"
             } => {
                 tracing::info!(
-                    "Lobby {} Actor: Received event '{}' from client {}",
+                    "Lobby {} Actor: Received event raw data '{}' from client {}",
                     self.lobby_id,
                     event_data,
                     client_id
                 );
 
-                // For this example, let's parse event_data to decide the action
-                // A more robust solution would use a structured event format (e.g., JSON)
-                let response_text = "Hello World".to_string(); // Base message
+                // Parse event_data: first word is command, rest is payload
+                let mut parts = event_data.splitn(2, ' ');
+                let command = parts.next().unwrap_or("").to_lowercase(); // Get command, or empty if bad format
+                let payload = parts.next().unwrap_or("Default message if none provided"); // Get payload
 
-                match event_data.to_lowercase().as_str() {
+                tracing::info!(
+                    "Lobby {} Actor: Parsed command: '{}', payload: '{}' from client {}",
+                    self.lobby_id,
+                    command,
+                    payload,
+                    client_id
+                );
+
+                // Use the 'payload' as the message content
+                let message_to_send = payload.to_string();
+
+                match command.as_str() {
                     "send_to_self" => {
                         if let Some(sender_tx) = self.clients.get(&client_id) {
+                            // Send the custom payload
                             if sender_tx
                                 .send(ws::Message::Text(
-                                    format!("Private: {}", response_text).into(),
+                                    format!("Private: {}", message_to_send).into(),
                                 ))
                                 .await
                                 .is_err()
@@ -101,7 +114,6 @@ impl LobbyActor {
                                     self.lobby_id,
                                     client_id
                                 );
-                                // Client might have disconnected, consider removing them here or letting disconnect handler do it
                             }
                         } else {
                             tracing::warn!(
@@ -114,9 +126,10 @@ impl LobbyActor {
                     "broadcast_all" => {
                         tracing::info!("Lobby {}: Broadcasting to all clients", self.lobby_id);
                         for (target_client_id, client_tx) in self.clients.iter() {
+                            // Send the custom payload
                             if client_tx
                                 .send(ws::Message::Text(
-                                    format!("Broadcast: {}", response_text).into(),
+                                    format!("Broadcast: {}", message_to_send).into(),
                                 ))
                                 .await
                                 .is_err()
@@ -126,7 +139,6 @@ impl LobbyActor {
                                     self.lobby_id,
                                     target_client_id
                                 );
-                                // Mark for removal or handle disconnect
                             }
                         }
                     }
@@ -138,12 +150,11 @@ impl LobbyActor {
                         );
                         for (target_client_id, client_tx) in self.clients.iter() {
                             if *target_client_id != client_id {
-                                // Don't send to the originator
+                                // Send the custom payload
                                 if client_tx
-                                    .send(ws::Message::Text(format!(
-                                        "Broadcast (others): {}",
-                                        response_text
-                                    ).into()))
+                                    .send(ws::Message::Text(
+                                        format!("Broadcast (others): {}", message_to_send).into(),
+                                    ))
                                     .await
                                     .is_err()
                                 {
@@ -152,18 +163,21 @@ impl LobbyActor {
                                         self.lobby_id,
                                         target_client_id
                                     );
-                                    // Mark for removal or handle disconnect
                                 }
                             }
                         }
                     }
-                    // You could add "send_to_specific <OTHER_CLIENT_ID>" if you pass target IDs
                     _ => {
-                        // Default: treat as "send_to_self" or an echo for now
-                        tracing::warn!("Lobby {}: Unknown event command: '{}'. Sending default response to self.", self.lobby_id, event_data);
+                        tracing::warn!(
+                            "Lobby {}: Unknown command: '{}'. Sending echo of payload to self.",
+                            self.lobby_id,
+                            command
+                        );
                         if let Some(sender_tx) = self.clients.get(&client_id) {
                             if sender_tx
-                                .send(ws::Message::Text(format!("Echo: {}", event_data).into()))
+                                .send(ws::Message::Text(
+                                    format!("Echo of your message: {}", message_to_send).into(),
+                                ))
                                 .await
                                 .is_err()
                             {
@@ -177,6 +191,7 @@ impl LobbyActor {
                     }
                 }
             }
+            // ... other LobbyActorMessage cases remain the same
             LobbyActorMessage::ClientConnected {
                 client_id,
                 client_tx,
@@ -204,12 +219,24 @@ impl LobbyActor {
             }
             LobbyActorMessage::CheckShutdown => {
                 if self.clients.is_empty() {
-                    // Use the new clients map
                     tracing::info!(
                         "Lobby {} Actor: Confirmed no clients, notifying manager to shut down.",
                         self.lobby_id
                     );
-                    // The rest of this logic remains the same
+                    // Manager notification logic...
+                    if let Err(e) = self
+                        .manager_handle
+                        .notify_lobby_shutdown(self.lobby_id)
+                        .await
+                    {
+                        tracing::error!(
+                            "Lobby {} Actor: Failed to notify manager of shutdown: {}",
+                            self.lobby_id,
+                            e
+                        );
+                    }
+                    // The actor should break its loop after notifying manager.
+                    // This is handled in run_lobby_actor.
                 }
             }
         }

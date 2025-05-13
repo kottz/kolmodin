@@ -7,42 +7,36 @@ document.addEventListener('DOMContentLoaded', () => {
     const disconnectBtn = document.getElementById('disconnectBtn');
     const connectionStatus = document.getElementById('connectionStatus');
     const logOutput = document.getElementById('logOutput');
+    const messageInput = document.getElementById('messageInput'); // Get the message input
 
     // --- New Buttons for Sending Commands ---
-    // Assuming the original sendBtn and messageInput are in a div with class "section"
-    // and we want to replace them.
-    // If your HTML structure is different, you might need to adjust how these are added.
-    const oldSendBtn = document.getElementById('sendBtn');
-    const oldMessageInput = document.getElementById('messageInput');
-    const sendSection = oldSendBtn ? oldSendBtn.parentElement : document.querySelector('.section:nth-of-type(3)'); // Fallback selector
+    const sendMessageSection = document.getElementById('sendMessageSection');
 
     const sendToSelfBtn = document.createElement('button');
     sendToSelfBtn.id = 'sendToSelfBtn';
-    sendToSelfBtn.textContent = 'Send "Hello World" to Self';
-    sendToSelfBtn.style.marginRight = '10px'; // Add some spacing
+    sendToSelfBtn.textContent = 'Send to Self';
+    sendToSelfBtn.style.marginRight = '10px';
+    sendToSelfBtn.style.marginTop = '5px'; // Add some top margin
 
     const broadcastAllBtn = document.createElement('button');
     broadcastAllBtn.id = 'broadcastAllBtn';
-    broadcastAllBtn.textContent = 'Broadcast "Hello World" to All';
-    broadcastAllBtn.style.marginRight = '10px'; // Add some spacing
+    broadcastAllBtn.textContent = 'Broadcast to All';
+    broadcastAllBtn.style.marginRight = '10px';
+    broadcastAllBtn.style.marginTop = '5px';
 
     const broadcastOthersBtn = document.createElement('button');
     broadcastOthersBtn.id = 'broadcastOthersBtn';
-    broadcastOthersBtn.textContent = 'Broadcast "Hello World" to Others';
+    broadcastOthersBtn.textContent = 'Broadcast to Others';
+    broadcastOthersBtn.style.marginTop = '5px';
 
-    if (sendSection) {
-        // Clear out old send elements if they exist
-        if (oldSendBtn) sendSection.removeChild(oldSendBtn);
-        if (oldMessageInput) sendSection.removeChild(oldMessageInput);
-
-        // Add new buttons
-        sendSection.appendChild(sendToSelfBtn);
-        sendSection.appendChild(broadcastAllBtn);
-        sendSection.appendChild(broadcastOthersBtn);
+    if (sendMessageSection) {
+        // Append new buttons after the messageInput
+        sendMessageSection.appendChild(sendToSelfBtn);
+        sendMessageSection.appendChild(broadcastAllBtn);
+        sendMessageSection.appendChild(broadcastOthersBtn);
     } else {
-        console.error("Could not find the 'Send Message' section to add new buttons.");
+        console.error("Could not find the 'sendMessageSection' to add new buttons.");
     }
-
 
     // --- WebSocket and Server Configuration ---
     let webSocket = null;
@@ -53,9 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function logMessage(message, type = 'system') {
         const p = document.createElement('p');
         p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-        p.classList.add(`log-${type}`); // For CSS styling (log-sent, log-received, etc.)
+        p.classList.add(`log-${type}`);
         logOutput.appendChild(p);
-        logOutput.scrollTop = logOutput.scrollHeight; // Auto-scroll to bottom
+        logOutput.scrollTop = logOutput.scrollHeight;
     }
 
     // --- UI Update Functions ---
@@ -65,8 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
         connectBtn.disabled = true;
         lobbyIdInput.disabled = true;
         disconnectBtn.disabled = false;
+        messageInput.disabled = false; // Enable message input
 
-        // Enable new command buttons
         sendToSelfBtn.disabled = false;
         broadcastAllBtn.disabled = false;
         broadcastOthersBtn.disabled = false;
@@ -76,21 +70,20 @@ document.addEventListener('DOMContentLoaded', () => {
         connectionStatus.textContent = 'Not Connected';
         connectionStatus.style.color = 'red';
         lobbyIdInput.disabled = false;
-        // Enable connect button only if there's a lobby ID in the input
         connectBtn.disabled = lobbyIdInput.value.trim() === '';
         disconnectBtn.disabled = true;
+        messageInput.disabled = true; // Disable message input
+        messageInput.value = ''; // Clear message input
 
-        // Disable new command buttons
         sendToSelfBtn.disabled = true;
         broadcastAllBtn.disabled = true;
         broadcastOthersBtn.disabled = true;
 
-        webSocket = null; // Clear WebSocket object
+        webSocket = null;
     }
 
     // --- Event Listeners for UI Elements ---
     lobbyIdInput.addEventListener('input', () => {
-        // Enable connect button if there's text and not already connected
         if (lobbyIdInput.value.trim() !== '' && !webSocket) {
             connectBtn.disabled = false;
         } else {
@@ -111,9 +104,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             const newLobbyId = data.lobby_id;
             lobbyIdDisplay.textContent = newLobbyId;
-            lobbyIdInput.value = newLobbyId; // Populate input for easy connect
+            lobbyIdInput.value = newLobbyId;
             logMessage(`Lobby created: ${newLobbyId}`, 'system');
-            if (!webSocket) connectBtn.disabled = false; // Enable connect if not already connected
+            if (!webSocket) connectBtn.disabled = false;
         } catch (error) {
             logMessage(`Error creating lobby: ${error.message}`, 'error');
             console.error('Error creating lobby:', error);
@@ -142,7 +135,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-
         webSocket.onopen = () => {
             logMessage(`Successfully connected to WebSocket for lobby: ${lobbyId}`, 'system');
             updateUIConnected(lobbyId);
@@ -153,11 +145,8 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         webSocket.onerror = (errorEvent) => {
-            // The error event itself doesn't have much detail for failed connections.
-            // The browser console usually has more info (e.g., "WebSocket connection to '...' failed").
             logMessage(`WebSocket Error. Check browser console for details.`, 'error');
             console.error('WebSocket Error Event:', errorEvent);
-            // onclose will usually be called after an error.
         };
 
         webSocket.onclose = (event) => {
@@ -166,7 +155,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (event.reason) reason += ` Reason: ${event.reason}`;
             if (!reason && !event.wasClean) reason = 'Connection failed or closed unexpectedly.';
             else if (!reason && event.wasClean) reason = 'Connection closed cleanly.';
-
             logMessage(`WebSocket disconnected. ${reason}`, event.wasClean ? 'system' : 'error');
             updateUIDisconnected();
         };
@@ -176,15 +164,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (webSocket) {
             logMessage('Disconnecting...', 'system');
             webSocket.close();
-            // The onclose event handler will call updateUIDisconnected()
         }
     });
 
-    // --- Function to Send Commands via WebSocket ---
-    function sendMessageCommand(command) {
+    // --- Function to Send Commands with Message Payload via WebSocket ---
+    function sendCommandWithMessage(commandType) {
         if (webSocket && webSocket.readyState === WebSocket.OPEN) {
-            logMessage(`Sending command: ${command}`, 'sent');
-            webSocket.send(command);
+            const userMessage = messageInput.value.trim();
+            if (userMessage === "") {
+                logMessage("Please type a message before sending.", "error");
+                messageInput.focus();
+                return;
+            }
+            // Format: COMMAND_TYPE<space>Actual message
+            const fullMessage = `${commandType} ${userMessage}`;
+            logMessage(`Sending: ${fullMessage}`, 'sent');
+            webSocket.send(fullMessage);
+            // Optionally clear the input after sending
+            // messageInput.value = '';
         } else {
             logMessage('WebSocket is not connected. Cannot send command.', 'error');
         }
@@ -192,15 +189,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Event Listeners for New Command Buttons ---
     sendToSelfBtn.addEventListener('click', () => {
-        sendMessageCommand("send_to_self");
+        sendCommandWithMessage("send_to_self");
     });
 
     broadcastAllBtn.addEventListener('click', () => {
-        sendMessageCommand("broadcast_all");
+        sendCommandWithMessage("broadcast_all");
     });
 
     broadcastOthersBtn.addEventListener('click', () => {
-        sendMessageCommand("broadcast_except_self");
+        sendCommandWithMessage("broadcast_except_self");
     });
 
     // --- Initial UI State ---
