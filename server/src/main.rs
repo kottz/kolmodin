@@ -17,8 +17,8 @@ use std::{
     net::SocketAddr,
     sync::Arc, // Required for AppState if not using explicit actor for manager initially
 };
+use tokio::sync::mpsc::Sender as TokioMpscSender; // Alias to avoid conflict with futures_util::SinkExt::send
 use tokio::sync::{mpsc, oneshot};
-use tokio::sync::mpsc::{Sender as TokioMpscSender};
 use tokio::time::Instant;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -31,24 +31,27 @@ use uuid::Uuid;
 enum LobbyActorMessage {
     ProcessEvent {
         client_id: Uuid,
-        event_data: String,
-        respond_to: oneshot::Sender<String>, // Direct response for "Hello World"
+        event_data: String, // We can parse this to determine the action
+                            // respond_to is no longer needed here if we handle all responses via client_tx
     },
     ClientConnected {
         client_id: Uuid,
+        // NEW: Sender to push messages directly to this client's WebSocket
+        client_tx: TokioMpscSender<ws::Message>,
     },
     ClientDisconnected {
         client_id: Uuid,
     },
-    // Message to tell the actor to check if it should shut down
+    // CheckShutdown remains the same
     CheckShutdown,
 }
 
 struct LobbyActor {
     receiver: mpsc::Receiver<LobbyActorMessage>,
     lobby_id: Uuid,
-    connected_clients: HashSet<Uuid>,
-    // Handle to the manager to notify on shutdown
+    // OLD: connected_clients: HashSet<Uuid>,
+    // NEW: Store client ID and their WebSocket sender
+    clients: HashMap<Uuid, TokioMpscSender<ws::Message>>,
     manager_handle: LobbyManagerHandle,
 }
 
@@ -61,7 +64,7 @@ impl LobbyActor {
         LobbyActor {
             receiver,
             lobby_id,
-            connected_clients: HashSet::new(),
+            clients: HashMap::new(), // Changed from HashSet
             manager_handle,
         }
     }
@@ -70,24 +73,120 @@ impl LobbyActor {
         match msg {
             LobbyActorMessage::ProcessEvent {
                 client_id,
-                event_data: _, // We ignore event_data for "Hello World"
-                respond_to,
+                event_data,
             } => {
                 tracing::info!(
-                    "Lobby {} Actor: Received event from client {}",
+                    "Lobby {} Actor: Received event '{}' from client {}",
                     self.lobby_id,
+                    event_data,
                     client_id
                 );
-                // The core "game logic" for this basic example
-                let _ = respond_to.send("Hello World".to_string());
+
+                // For this example, let's parse event_data to decide the action
+                // A more robust solution would use a structured event format (e.g., JSON)
+                let response_text = "Hello World".to_string(); // Base message
+
+                match event_data.to_lowercase().as_str() {
+                    "send_to_self" => {
+                        if let Some(sender_tx) = self.clients.get(&client_id) {
+                            if sender_tx
+                                .send(ws::Message::Text(
+                                    format!("Private: {}", response_text).into(),
+                                ))
+                                .await
+                                .is_err()
+                            {
+                                tracing::warn!(
+                                    "Lobby {}: Failed to send direct response to client {}",
+                                    self.lobby_id,
+                                    client_id
+                                );
+                                // Client might have disconnected, consider removing them here or letting disconnect handler do it
+                            }
+                        } else {
+                            tracing::warn!(
+                                "Lobby {}: Client {} not found for direct response",
+                                self.lobby_id,
+                                client_id
+                            );
+                        }
+                    }
+                    "broadcast_all" => {
+                        tracing::info!("Lobby {}: Broadcasting to all clients", self.lobby_id);
+                        for (target_client_id, client_tx) in self.clients.iter() {
+                            if client_tx
+                                .send(ws::Message::Text(
+                                    format!("Broadcast: {}", response_text).into(),
+                                ))
+                                .await
+                                .is_err()
+                            {
+                                tracing::warn!(
+                                    "Lobby {}: Failed to broadcast to client {}",
+                                    self.lobby_id,
+                                    target_client_id
+                                );
+                                // Mark for removal or handle disconnect
+                            }
+                        }
+                    }
+                    "broadcast_except_self" => {
+                        tracing::info!(
+                            "Lobby {}: Broadcasting to all clients except sender {}",
+                            self.lobby_id,
+                            client_id
+                        );
+                        for (target_client_id, client_tx) in self.clients.iter() {
+                            if *target_client_id != client_id {
+                                // Don't send to the originator
+                                if client_tx
+                                    .send(ws::Message::Text(format!(
+                                        "Broadcast (others): {}",
+                                        response_text
+                                    ).into()))
+                                    .await
+                                    .is_err()
+                                {
+                                    tracing::warn!(
+                                        "Lobby {}: Failed to broadcast (others) to client {}",
+                                        self.lobby_id,
+                                        target_client_id
+                                    );
+                                    // Mark for removal or handle disconnect
+                                }
+                            }
+                        }
+                    }
+                    // You could add "send_to_specific <OTHER_CLIENT_ID>" if you pass target IDs
+                    _ => {
+                        // Default: treat as "send_to_self" or an echo for now
+                        tracing::warn!("Lobby {}: Unknown event command: '{}'. Sending default response to self.", self.lobby_id, event_data);
+                        if let Some(sender_tx) = self.clients.get(&client_id) {
+                            if sender_tx
+                                .send(ws::Message::Text(format!("Echo: {}", event_data).into()))
+                                .await
+                                .is_err()
+                            {
+                                tracing::warn!(
+                                    "Lobby {}: Failed to send echo to client {}",
+                                    self.lobby_id,
+                                    client_id
+                                );
+                            }
+                        }
+                    }
+                }
             }
-            LobbyActorMessage::ClientConnected { client_id } => {
+            LobbyActorMessage::ClientConnected {
+                client_id,
+                client_tx,
+            } => {
                 tracing::info!(
                     "Lobby {} Actor: Client {} connected.",
                     self.lobby_id,
                     client_id
                 );
-                self.connected_clients.insert(client_id);
+                self.clients.insert(client_id, client_tx);
             }
             LobbyActorMessage::ClientDisconnected { client_id } => {
                 tracing::info!(
@@ -95,33 +194,22 @@ impl LobbyActor {
                     self.lobby_id,
                     client_id
                 );
-                self.connected_clients.remove(&client_id);
-                // After a client disconnects, send a message to self to check for shutdown
-                // This needs to be done carefully to avoid a message storm if using try_send
-                // For simplicity, we'll handle this in the main loop check or rely on manager
-                // For now, let's just log. A real implementation would check connected_clients.is_empty()
-                // and potentially start a shutdown timer or notify the manager immediately.
-                if self.connected_clients.is_empty() {
+                self.clients.remove(&client_id);
+                if self.clients.is_empty() {
                     tracing::info!(
                         "Lobby {} Actor: No clients connected. Eligible for shutdown.",
                         self.lobby_id
                     );
-                    // We'll let the CheckShutdown message handle the actual notification
                 }
             }
             LobbyActorMessage::CheckShutdown => {
-                if self.connected_clients.is_empty() {
+                if self.clients.is_empty() {
+                    // Use the new clients map
                     tracing::info!(
                         "Lobby {} Actor: Confirmed no clients, notifying manager to shut down.",
                         self.lobby_id
                     );
-                    // Notify manager and then this actor will terminate as its receiver loop ends
-                    // after the manager drops its handle.
-                    // This requires the run_lobby_actor to break its loop.
-                    // For now, this message is more of a placeholder.
-                    // A more robust way is for the actor to decide to stop processing messages.
-                    // Let's make the manager drop the handle upon receiving LobbyActorShutdown.
-                    // The actor itself will stop when all handles (including the one held by manager) are dropped.
+                    // The rest of this logic remains the same
                 }
             }
         }
@@ -142,21 +230,21 @@ async fn run_lobby_actor(mut actor: LobbyActor) {
                 actor.handle_message(msg).await;
             }
             _ = shutdown_check_interval.tick() => {
-                if actor.connected_clients.is_empty() {
+                if actor.clients.is_empty() {
                     tracing::info!("Lobby {} Actor: Inactivity detected ({}s). Notifying manager and preparing to shut down.", actor.lobby_id, shutdown_duration.as_secs());
                     if let Err(e) = actor.manager_handle.notify_lobby_shutdown(actor.lobby_id).await {
                         tracing::error!("Lobby {} Actor: Failed to notify manager of shutdown: {}", actor.lobby_id, e);
                     }
                     break; // Exit the loop, actor task will terminate.
                 } else {
-                    tracing::debug!("Lobby {} Actor: Activity check, {} clients connected. Resetting inactivity timer.", actor.lobby_id, actor.connected_clients.len());
+                    tracing::debug!("Lobby {} Actor: Activity check, {} clients connected. Resetting inactivity timer.", actor.lobby_id, actor.clients.len());
                     // The interval resets automatically on the next tick.
                 }
             }
             else => {
                 tracing::info!("Lobby Actor {}: All message channel senders dropped. Shutting down.", actor.lobby_id);
                 // Optionally, notify manager if it wasn't an explicit shutdown_check
-                if !actor.connected_clients.is_empty() { // If clients were connected, this is unexpected
+                if !actor.clients.is_empty() { // If clients were connected, this is unexpected
                     tracing::warn!("Lobby {} Actor: Shutting down due to dropped channels WITH clients connected. This might indicate an issue.", actor.lobby_id);
                 }
                 // Ensure manager is notified if this actor is shutting down for reasons other than inactivity timer
@@ -185,23 +273,25 @@ impl LobbyActorHandle {
         Self { sender, lobby_id }
     }
 
-    async fn process_event(&self, client_id: Uuid, event_data: String) -> Result<String, String> {
-        let (respond_to, rx) = oneshot::channel();
+    async fn process_event(&self, client_id: Uuid, event_data: String) -> Result<(), String> {
+        // No oneshot channel needed here anymore for the primary response,
+        // as the LobbyActor will use the client_tx to send messages.
         let msg = LobbyActorMessage::ProcessEvent {
             client_id,
             event_data,
-            respond_to,
         };
         self.sender
             .send(msg)
             .await
-            .map_err(|e| format!("Failed to send event to lobby actor: {}", e))?;
-        rx.await
-            .map_err(|e| format!("Lobby actor failed to respond: {}", e))
+            .map_err(|e| format!("Failed to send event to lobby actor: {}", e))
     }
 
-    async fn client_connected(&self, client_id: Uuid) {
-        let msg = LobbyActorMessage::ClientConnected { client_id };
+    // Updated client_connected to pass the client_tx
+    async fn client_connected(&self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
+        let msg = LobbyActorMessage::ClientConnected {
+            client_id,
+            client_tx,
+        };
         if let Err(e) = self.sender.send(msg).await {
             tracing::error!(
                 "Lobby {}: Failed to send ClientConnected to actor: {}",
@@ -427,113 +517,150 @@ async fn ws_handler(
 }
 
 async fn handle_socket(
-    mut socket: WebSocket,
+    socket: WebSocket, // Renamed from mut socket as we'll split it
     client_id: Uuid,
-    lobby_handle: LobbyActorHandle, // Actor handle for the specific lobby
+    lobby_handle: LobbyActorHandle,
 ) {
     tracing::info!(
-        "WebSocket: Client {} connected to lobby {}",
+        "WebSocket: Client {} now fully handling connection for lobby {}",
         client_id,
         lobby_handle.lobby_id
     );
 
-    // Notify the lobby actor that a new client has connected
-    lobby_handle.client_connected(client_id).await;
+    // Split the WebSocket into a sender and receiver.
+    let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    loop {
-        match socket.recv().await {
-            Some(Ok(msg)) => {
-                match msg {
-                    ws::Message::Text(text_msg) => {
-                        tracing::debug!(
-                            "Client {} in lobby {}: Received text: {:?}",
-                            client_id,
-                            lobby_handle.lobby_id,
-                            text_msg
-                        );
+    // Create an mpsc channel for messages from the LobbyActor to this client's WebSocket.
+    // The LobbyActor will hold the `actor_to_client_tx`.
+    // This task will listen on `actor_to_client_rx` and send messages to `ws_sender`.
+    let (actor_to_client_tx, mut actor_to_client_rx) = mpsc::channel::<ws::Message>(32); // Buffer size of 32 for messages to this client
 
-                        // Send the event to the lobby actor and wait for a response
-                        match lobby_handle
-                            .process_event(client_id, text_msg.to_string().clone())
-                            .await
-                        {
-                            Ok(response) => {
-                                // Send the actor's response back to the client
-                                if socket
-                                    .send(ws::Message::Text(response.into()))
-                                    .await
-                                    .is_err()
-                                {
-                                    tracing::info!(
-                                        "Client {} in lobby {}: WS send error, client disconnected.",
-                                        client_id, lobby_handle.lobby_id
-                                    );
-                                    break; // Client disconnected
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Client {} in lobby {}: Error processing event: {}",
-                                    client_id,
-                                    lobby_handle.lobby_id,
-                                    e
-                                );
-                                // Optionally send an error message back to the client
-                                if socket
-                                    .send(ws::Message::Text(format!("Error: {}", e).into()))
-                                    .await
-                                    .is_err()
-                                {
-                                    break; // Client disconnected
-                                }
-                            }
-                        }
-                    }
-                    ws::Message::Binary(_) => {
-                        tracing::debug!(
-                            "Client {} in lobby {}: Received binary message (ignored)",
-                            client_id,
-                            lobby_handle.lobby_id
-                        );
-                    }
-                    ws::Message::Ping(_) | ws::Message::Pong(_) => {
-                        // Axum handles pongs automatically for pings it sends.
-                        // If you need to handle custom pings/pongs, do it here.
-                    }
-                    ws::Message::Close(_) => {
-                        tracing::info!(
-                            "Client {} in lobby {}: WebSocket closed by client.",
-                            client_id,
-                            lobby_handle.lobby_id
-                        );
-                        break; // Client initiated close
-                    }
-                }
-            }
-            Some(Err(e)) => {
-                tracing::warn!(
-                    "Client {} in lobby {}: WebSocket error: {}",
-                    client_id,
-                    lobby_handle.lobby_id,
-                    e
-                );
-                break; // Connection error
-            }
-            None => {
+    // Notify the lobby actor that a new client has connected, providing the sender half of the channel.
+    lobby_handle
+        .client_connected(client_id, actor_to_client_tx)
+        .await;
+
+    // Task to forward messages from LobbyActor (via actor_to_client_rx) to the WebSocket client (ws_sender)
+    let lobby_id_clone_for_send_task = lobby_handle.lobby_id; // Clone for the send task
+    let client_id_clone_for_send_task = client_id; // Clone for the send task
+    let mut send_task = tokio::spawn(async move {
+        while let Some(message_to_send) = actor_to_client_rx.recv().await {
+            if ws_sender.send(message_to_send).await.is_err() {
                 tracing::info!(
-                    "Client {} in lobby {}: WebSocket connection closed (no more messages).",
-                    client_id,
-                    lobby_handle.lobby_id
+                    "Client {} in lobby {}: WS send error (from actor), client likely disconnected.",
+                    client_id_clone_for_send_task, lobby_id_clone_for_send_task
                 );
-                break; // Connection closed
+                break; // Error sending, socket is likely closed.
             }
         }
+        // If the loop breaks, it means actor_to_client_tx was dropped (actor shut down or removed client)
+        // or ws_sender.send failed.
+        tracing::debug!(
+            "Client {} in lobby {}: Send task from actor to WS client terminating.",
+            client_id_clone_for_send_task,
+            lobby_id_clone_for_send_task
+        );
+    });
+
+    // Task to handle incoming messages from the WebSocket client (ws_receiver)
+    // and forward them to the LobbyActor.
+    let lobby_handle_clone_for_recv_task = lobby_handle.clone(); // Clone for the receive task
+    let client_id_clone_for_recv_task = client_id; // Clone for the receive task
+    let lobby_id_clone_for_recv_task = lobby_handle.lobby_id;
+    let mut recv_task = tokio::spawn(async move {
+        loop {
+            match ws_receiver.next().await {
+                Some(Ok(msg)) => {
+                    match msg {
+                        ws::Message::Text(text_msg) => {
+                            tracing::debug!(
+                                "Client {} in lobby {}: Received text from WS: {:?}",
+                                client_id_clone_for_recv_task,
+                                lobby_id_clone_for_recv_task,
+                                text_msg
+                            );
+
+                            // Send the event to the lobby actor
+                            // No direct response expected here anymore, actor sends via its channel
+                            if let Err(e) = lobby_handle_clone_for_recv_task
+                                .process_event(client_id_clone_for_recv_task, text_msg.to_string())
+                                .await
+                            {
+                                tracing::error!(
+                                    "Client {} in lobby {}: Error sending event to actor: {}",
+                                    client_id_clone_for_recv_task,
+                                    lobby_id_clone_for_recv_task,
+                                    e
+                                );
+                                // Optionally, you could try to send an error back to the client
+                                // via the actor_to_client_tx if it was still held by the actor,
+                                // but it's simpler to let the actor handle all outbound comms.
+                                // For now, we just log.
+                            }
+                        }
+                        ws::Message::Binary(_) => {
+                            tracing::debug!(
+                                "Client {} in lobby {}: Received binary message (ignored)",
+                                client_id_clone_for_recv_task,
+                                lobby_id_clone_for_recv_task
+                            );
+                        }
+                        ws::Message::Ping(_) | ws::Message::Pong(_) => {}
+                        ws::Message::Close(_) => {
+                            tracing::info!(
+                                "Client {} in lobby {}: WebSocket closed by client (recv).",
+                                client_id_clone_for_recv_task,
+                                lobby_id_clone_for_recv_task
+                            );
+                            break; // Client initiated close
+                        }
+                    }
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        "Client {} in lobby {}: WebSocket error (recv): {}",
+                        client_id_clone_for_recv_task,
+                        lobby_id_clone_for_recv_task,
+                        e
+                    );
+                    break; // Connection error
+                }
+                None => {
+                    tracing::info!(
+                        "Client {} in lobby {}: WebSocket connection closed (recv - no more messages).",
+                        client_id_clone_for_recv_task,
+                        lobby_id_clone_for_recv_task
+                    );
+                    break; // Connection closed
+                }
+            }
+        }
+        tracing::debug!(
+            "Client {} in lobby {}: Receive task from WS client to actor terminating.",
+            client_id_clone_for_recv_task,
+            lobby_id_clone_for_recv_task
+        );
+    });
+
+    // Wait for either task to complete.
+    // If one task finishes (e.g., recv_task due to client disconnect),
+    // we want to abort the other to clean up resources.
+    tokio::select! {
+        _ = (&mut send_task) => {
+            recv_task.abort();
+            tracing::debug!("Client {} in lobby {}: Send task finished or aborted, aborting recv_task.", client_id, lobby_handle.lobby_id);
+        },
+        _ = (&mut recv_task) => {
+            send_task.abort();
+            tracing::debug!("Client {} in lobby {}: Recv task finished or aborted, aborting send_task.", client_id, lobby_handle.lobby_id);
+        },
     }
 
     // Notify the lobby actor that the client has disconnected
+    // This ensures the actor cleans up the client's sender channel from its map.
     lobby_handle.client_disconnected(client_id).await;
     tracing::info!(
-        "WebSocket: Client {} disconnected from lobby {}",
+        "WebSocket: Client {} fully disconnected from lobby {}",
         client_id,
         lobby_handle.lobby_id
     );
