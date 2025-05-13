@@ -1,0 +1,105 @@
+body {
+    font-family: sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start; /* Align items to the top */
+    min-height: 100vh;
+}
+
+.container {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 700px;
+}
+
+.section {
+    margin-bottom: 25px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #eee;
+}
+
+.section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+h1, h2 {
+    color: #333;
+}
+
+h1 {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+input[type="text"] {
+    padding: 10px;
+    margin-right: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    min-width: 200px;
+}
+
+button {
+    padding: 10px 15px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+#lobbyIdDisplay {
+    font-family: monospace;
+    background-color: #e9ecef;
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+#connectionStatus {
+    font-weight: bold;
+}
+
+.log-output {
+    background-color: #222; /* Dark background for log */
+    color: #eee; /* Light text for log */
+    padding: 15px;
+    border-radius: 4px;
+    height: 200px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.9em;
+    white-space: pre-wrap; /* Allow wrapping of long lines */
+    word-break: break-all;
+}
+
+.log-output p {
+    margin: 5px 0;
+    padding: 2px 0;
+    border-bottom: 1px dashed #444;
+}
+.log-output p:last-child {
+    border-bottom: none;
+}
+
+.log-sent { color: #87cefa; } /* Light blue for sent */
+.log-received { color: #90ee90; } /* Light green for received */
+.log-system { color: #ffa07a; } /* Light salmon for system/error */
+.log-error { color: #ff6347; font-weight: bold; } /* Tomato for errors */

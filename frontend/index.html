@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Axum WebSocket Game Client</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>WebSocket Game Client</h1>
+
+        <div class="section">
+            <h2>1. Lobby Management</h2>
+            <button id="createLobbyBtn">Create New Lobby</button>
+            <p>Current Lobby ID: <strong id="lobbyIdDisplay">-</strong></p>
+        </div>
+
+        <div class="section">
+            <h2>2. Connect to Lobby</h2>
+            <label for="lobbyIdInput">Lobby ID to Connect:</label>
+            <input type="text" id="lobbyIdInput" placeholder="Enter Lobby ID">
+            <button id="connectBtn" disabled>Connect to Lobby</button>
+            <button id="disconnectBtn" disabled>Disconnect</button>
+            <p>Connection Status: <span id="connectionStatus">Not Connected</span></p>
+        </div>
+
+        <div class="section" id="sendMessageSection"> <!-- Added an ID for easier targeting, though script uses fallback -->
+            <h2>3. Send Message Commands</h2>
+            <!-- Content of this div will be populated by script.js -->
+            <!-- Original input and button are removed:
+            <input type="text" id="messageInput" placeholder="Type message..." disabled>
+            <button id="sendBtn" disabled>Send "Hello World" Event</button>
+            -->
+        </div>
+
+        <div class="section">
+            <h2>4. Log</h2>
+            <div id="logOutput" class="log-output"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
