@@ -1,3 +1,5 @@
+// src/main.rs
+
 use axum::{
     extract::{
         ws::{self, WebSocket, WebSocketUpgrade},
@@ -13,58 +15,58 @@ use futures_util::{SinkExt, StreamExt};
 use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
+    // HashSet is no longer directly used in LobbyActor if game logic handles clients
     net::SocketAddr,
-    sync::Arc, // Required for AppState if not using explicit actor for manager initially
+    // Arc is not strictly needed for AppState here but doesn't hurt
 };
-use tokio::sync::mpsc::Sender as TokioMpscSender; // Alias to avoid conflict with futures_util::SinkExt::send
+use tokio::sync::mpsc::Sender as TokioMpscSender;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
-// --- Actor Definitions ---
+// Declare the game_logic module
+mod game_logic;
+// Import the trait and specific game types
+use game_logic::{GameLogic, GameTwoEcho, HelloWorldGame};
 
 // --- LobbyActor ---
 #[derive(Debug)]
 enum LobbyActorMessage {
     ProcessEvent {
         client_id: Uuid,
-        event_data: String, // We can parse this to determine the action
-                            // respond_to is no longer needed here if we handle all responses via client_tx
+        event_data: String,
     },
     ClientConnected {
         client_id: Uuid,
-        // NEW: Sender to push messages directly to this client's WebSocket
         client_tx: TokioMpscSender<ws::Message>,
     },
     ClientDisconnected {
         client_id: Uuid,
     },
-    // CheckShutdown remains the same
     CheckShutdown,
 }
 
-struct LobbyActor {
+struct LobbyActor<G: GameLogic + Send + 'static> {
     receiver: mpsc::Receiver<LobbyActorMessage>,
     lobby_id: Uuid,
-    // OLD: connected_clients: HashSet<Uuid>,
-    // NEW: Store client ID and their WebSocket sender
-    clients: HashMap<Uuid, TokioMpscSender<ws::Message>>,
+    game_engine: G,
     manager_handle: LobbyManagerHandle,
 }
 
-impl LobbyActor {
+impl<G: GameLogic + Send + 'static> LobbyActor<G> {
     fn new(
         receiver: mpsc::Receiver<LobbyActorMessage>,
         lobby_id: Uuid,
         manager_handle: LobbyManagerHandle,
+        game_engine: G,
     ) -> Self {
         LobbyActor {
             receiver,
             lobby_id,
-            clients: HashMap::new(), // Changed from HashSet
+            game_engine,
             manager_handle,
         }
     }
@@ -73,157 +75,55 @@ impl LobbyActor {
         match msg {
             LobbyActorMessage::ProcessEvent {
                 client_id,
-                event_data, // This now contains "COMMAND message_payload"
+                event_data,
             } => {
                 tracing::info!(
-                    "Lobby {} Actor: Received event raw data '{}' from client {}",
+                    "Lobby {} Actor (Game: {}): Delegating event from client {}",
                     self.lobby_id,
-                    event_data,
+                    self.game_engine.game_type(),
                     client_id
                 );
-
-                // Parse event_data: first word is command, rest is payload
-                let mut parts = event_data.splitn(2, ' ');
-                let command = parts.next().unwrap_or("").to_lowercase(); // Get command, or empty if bad format
-                let payload = parts.next().unwrap_or("Default message if none provided"); // Get payload
-
-                tracing::info!(
-                    "Lobby {} Actor: Parsed command: '{}', payload: '{}' from client {}",
-                    self.lobby_id,
-                    command,
-                    payload,
-                    client_id
-                );
-
-                // Use the 'payload' as the message content
-                let message_to_send = payload.to_string();
-
-                match command.as_str() {
-                    "send_to_self" => {
-                        if let Some(sender_tx) = self.clients.get(&client_id) {
-                            // Send the custom payload
-                            if sender_tx
-                                .send(ws::Message::Text(
-                                    format!("Private: {}", message_to_send).into(),
-                                ))
-                                .await
-                                .is_err()
-                            {
-                                tracing::warn!(
-                                    "Lobby {}: Failed to send direct response to client {}",
-                                    self.lobby_id,
-                                    client_id
-                                );
-                            }
-                        } else {
-                            tracing::warn!(
-                                "Lobby {}: Client {} not found for direct response",
-                                self.lobby_id,
-                                client_id
-                            );
-                        }
-                    }
-                    "broadcast_all" => {
-                        tracing::info!("Lobby {}: Broadcasting to all clients", self.lobby_id);
-                        for (target_client_id, client_tx) in self.clients.iter() {
-                            // Send the custom payload
-                            if client_tx
-                                .send(ws::Message::Text(
-                                    format!("Broadcast: {}", message_to_send).into(),
-                                ))
-                                .await
-                                .is_err()
-                            {
-                                tracing::warn!(
-                                    "Lobby {}: Failed to broadcast to client {}",
-                                    self.lobby_id,
-                                    target_client_id
-                                );
-                            }
-                        }
-                    }
-                    "broadcast_except_self" => {
-                        tracing::info!(
-                            "Lobby {}: Broadcasting to all clients except sender {}",
-                            self.lobby_id,
-                            client_id
-                        );
-                        for (target_client_id, client_tx) in self.clients.iter() {
-                            if *target_client_id != client_id {
-                                // Send the custom payload
-                                if client_tx
-                                    .send(ws::Message::Text(
-                                        format!("Broadcast (others): {}", message_to_send).into(),
-                                    ))
-                                    .await
-                                    .is_err()
-                                {
-                                    tracing::warn!(
-                                        "Lobby {}: Failed to broadcast (others) to client {}",
-                                        self.lobby_id,
-                                        target_client_id
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        tracing::warn!(
-                            "Lobby {}: Unknown command: '{}'. Sending echo of payload to self.",
-                            self.lobby_id,
-                            command
-                        );
-                        if let Some(sender_tx) = self.clients.get(&client_id) {
-                            if sender_tx
-                                .send(ws::Message::Text(
-                                    format!("Echo of your message: {}", message_to_send).into(),
-                                ))
-                                .await
-                                .is_err()
-                            {
-                                tracing::warn!(
-                                    "Lobby {}: Failed to send echo to client {}",
-                                    self.lobby_id,
-                                    client_id
-                                );
-                            }
-                        }
-                    }
-                }
+                self.game_engine.handle_event(client_id, event_data).await;
             }
-            // ... other LobbyActorMessage cases remain the same
             LobbyActorMessage::ClientConnected {
                 client_id,
                 client_tx,
             } => {
                 tracing::info!(
-                    "Lobby {} Actor: Client {} connected.",
+                    "Lobby {} Actor (Game: {}): Delegating client {} connect.",
                     self.lobby_id,
+                    self.game_engine.game_type(),
                     client_id
                 );
-                self.clients.insert(client_id, client_tx);
+                self.game_engine
+                    .client_connected(client_id, client_tx)
+                    .await;
             }
             LobbyActorMessage::ClientDisconnected { client_id } => {
                 tracing::info!(
-                    "Lobby {} Actor: Client {} disconnected.",
+                    "Lobby {} Actor (Game: {}): Delegating client {} disconnect.",
                     self.lobby_id,
+                    self.game_engine.game_type(),
                     client_id
                 );
-                self.clients.remove(&client_id);
-                if self.clients.is_empty() {
+                self.game_engine.client_disconnected(client_id).await;
+
+                // Check for shutdown eligibility based on game engine's state
+                if self.game_engine.is_empty() {
                     tracing::info!(
-                        "Lobby {} Actor: No clients connected. Eligible for shutdown.",
-                        self.lobby_id
+                        "Lobby {} Actor (Game: {}): Game reports no clients. Eligible for shutdown.",
+                        self.lobby_id,
+                        self.game_engine.game_type()
                     );
                 }
             }
             LobbyActorMessage::CheckShutdown => {
-                if self.clients.is_empty() {
+                if self.game_engine.is_empty() {
                     tracing::info!(
-                        "Lobby {} Actor: Confirmed no clients, notifying manager to shut down.",
-                        self.lobby_id
+                        "Lobby {} Actor (Game: {}): Confirmed game empty, notifying manager to shut down.",
+                        self.lobby_id,
+                        self.game_engine.game_type()
                     );
-                    // Manager notification logic...
                     if let Err(e) = self
                         .manager_handle
                         .notify_lobby_shutdown(self.lobby_id)
@@ -235,19 +135,20 @@ impl LobbyActor {
                             e
                         );
                     }
-                    // The actor should break its loop after notifying manager.
-                    // This is handled in run_lobby_actor.
                 }
             }
         }
     }
 }
 
-async fn run_lobby_actor(mut actor: LobbyActor) {
-    tracing::info!("Lobby Actor {} started.", actor.lobby_id);
+async fn run_lobby_actor<G: GameLogic + Send + 'static>(mut actor: LobbyActor<G>) {
+    tracing::info!(
+        "Lobby Actor {} (Game: {}) started.",
+        actor.lobby_id,
+        actor.game_engine.game_type()
+    );
 
     let shutdown_duration = tokio::time::Duration::from_secs(60);
-    // The first tick will occur `shutdown_duration` from now.
     let mut shutdown_check_interval =
         tokio::time::interval_at(Instant::now() + shutdown_duration, shutdown_duration);
 
@@ -257,32 +158,30 @@ async fn run_lobby_actor(mut actor: LobbyActor) {
                 actor.handle_message(msg).await;
             }
             _ = shutdown_check_interval.tick() => {
-                if actor.clients.is_empty() {
-                    tracing::info!("Lobby {} Actor: Inactivity detected ({}s). Notifying manager and preparing to shut down.", actor.lobby_id, shutdown_duration.as_secs());
+                if actor.game_engine.is_empty() {
+                    tracing::info!("Lobby {} Actor (Game: {}): Inactivity detected. Notifying manager.",
+                        actor.lobby_id, actor.game_engine.game_type());
                     if let Err(e) = actor.manager_handle.notify_lobby_shutdown(actor.lobby_id).await {
                         tracing::error!("Lobby {} Actor: Failed to notify manager of shutdown: {}", actor.lobby_id, e);
                     }
-                    break; // Exit the loop, actor task will terminate.
+                    break;
                 } else {
-                    tracing::debug!("Lobby {} Actor: Activity check, {} clients connected. Resetting inactivity timer.", actor.lobby_id, actor.clients.len());
-                    // The interval resets automatically on the next tick.
+                    tracing::debug!("Lobby {} Actor (Game: {}): Activity check, game not empty.",
+                        actor.lobby_id, actor.game_engine.game_type());
                 }
             }
             else => {
-                tracing::info!("Lobby Actor {}: All message channel senders dropped. Shutting down.", actor.lobby_id);
-                // Optionally, notify manager if it wasn't an explicit shutdown_check
-                if !actor.clients.is_empty() { // If clients were connected, this is unexpected
-                    tracing::warn!("Lobby {} Actor: Shutting down due to dropped channels WITH clients connected. This might indicate an issue.", actor.lobby_id);
-                }
-                // Ensure manager is notified if this actor is shutting down for reasons other than inactivity timer
-                // However, the manager removing the handle is what causes this branch, usually.
-                // If the manager still holds a handle and this actor's receiver closes,
-                // it implies all other handles (like temporary ones in ws_handler) were dropped.
+                tracing::info!("Lobby Actor {} (Game: {}): All message channel senders dropped. Shutting down.",
+                    actor.lobby_id, actor.game_engine.game_type());
                 break;
             }
         }
     }
-    tracing::info!("Lobby Actor {} stopped.", actor.lobby_id);
+    tracing::info!(
+        "Lobby Actor {} (Game: {}) stopped.",
+        actor.lobby_id,
+        actor.game_engine.game_type()
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -292,17 +191,22 @@ struct LobbyActorHandle {
 }
 
 impl LobbyActorHandle {
-    // Renamed to indicate it's for creating an actor instance managed elsewhere (e.g., by LobbyManager)
-    fn new_spawned(lobby_id: Uuid, buffer_size: usize, manager_handle: LobbyManagerHandle) -> Self {
+    fn new_spawned<G: GameLogic + Send + 'static>(
+        lobby_id: Uuid,
+        buffer_size: usize,
+        manager_handle: LobbyManagerHandle,
+        game_engine_instance: G,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
-        let actor = LobbyActor::new(receiver, lobby_id, manager_handle);
-        tokio::spawn(run_lobby_actor(actor));
+        // Pass the game_engine to the LobbyActor constructor
+        let actor = LobbyActor::<G>::new(receiver, lobby_id, manager_handle, game_engine_instance);
+        tokio::spawn(run_lobby_actor::<G>(actor));
         Self { sender, lobby_id }
     }
 
+    // process_event, client_connected, client_disconnected remain unchanged
+    // as they were already forwarding appropriate messages.
     async fn process_event(&self, client_id: Uuid, event_data: String) -> Result<(), String> {
-        // No oneshot channel needed here anymore for the primary response,
-        // as the LobbyActor will use the client_tx to send messages.
         let msg = LobbyActorMessage::ProcessEvent {
             client_id,
             event_data,
@@ -313,7 +217,6 @@ impl LobbyActorHandle {
             .map_err(|e| format!("Failed to send event to lobby actor: {}", e))
     }
 
-    // Updated client_connected to pass the client_tx
     async fn client_connected(&self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         let msg = LobbyActorMessage::ClientConnected {
             client_id,
@@ -341,14 +244,16 @@ impl LobbyActorHandle {
 }
 
 // --- LobbyManagerActor ---
-#[derive(Debug, Serialize, Clone)] // Added Serialize and Clone
+#[derive(Debug, Serialize, Clone)]
 struct LobbyDetails {
     lobby_id: Uuid,
+    game_type_created: String, // To inform client which game was actually instantiated
 }
 
 #[derive(Debug)]
 enum LobbyManagerMessage {
     CreateLobby {
+        requested_game_type: Option<String>, // Client can request a game type
         respond_to: oneshot::Sender<LobbyDetails>,
     },
     GetLobbyHandle {
@@ -363,7 +268,6 @@ enum LobbyManagerMessage {
 struct LobbyManagerActor {
     receiver: mpsc::Receiver<LobbyManagerMessage>,
     lobbies: HashMap<Uuid, LobbyActorHandle>,
-    // To pass its own handle to newly created LobbyActors for callbacks
     self_handle_prototype: Option<LobbyManagerHandle>,
 }
 
@@ -376,27 +280,72 @@ impl LobbyManagerActor {
         }
     }
 
-    // Method to set its own handle after creation
     fn set_self_handle(&mut self, handle: LobbyManagerHandle) {
         self.self_handle_prototype = Some(handle);
     }
 
     async fn handle_message(&mut self, msg: LobbyManagerMessage) {
         match msg {
-            LobbyManagerMessage::CreateLobby { respond_to } => {
+            LobbyManagerMessage::CreateLobby {
+                requested_game_type,
+                respond_to,
+            } => {
                 let lobby_id = Uuid::new_v4();
-                tracing::info!("LobbyManager Actor: Creating lobby {}", lobby_id);
+                let game_type_str_req = requested_game_type
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+                tracing::info!(
+                    "LobbyManager: Creating lobby {} req_game='{}'",
+                    lobby_id,
+                    game_type_str_req
+                );
 
                 if let Some(manager_handle_clone) = self.self_handle_prototype.clone() {
-                    let lobby_actor_handle =
-                        LobbyActorHandle::new_spawned(lobby_id, 32, manager_handle_clone);
+                    // The "dynamic dispatch" happens here: choosing which concrete game to init
+                    // and which generic actor instantiation to spawn.
+                    let lobby_actor_handle: LobbyActorHandle;
+                    let actual_game_type_created: String;
+
+                    match game_type_str_req.to_lowercase().as_str() {
+                        "game2" | "gametwoecho" => {
+                            let game_engine = GameTwoEcho::new();
+                            actual_game_type_created = game_engine.game_type();
+                            lobby_actor_handle = LobbyActorHandle::new_spawned::<GameTwoEcho>(
+                                lobby_id,
+                                32,
+                                manager_handle_clone,
+                                game_engine,
+                            );
+                        }
+                        "helloworld" | "default" | "" => {
+                            let game_engine = HelloWorldGame::new();
+                            actual_game_type_created = game_engine.game_type();
+                            lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
+                                lobby_id,
+                                32,
+                                manager_handle_clone,
+                                game_engine,
+                            );
+                        }
+                        unknown => {
+                            tracing::warn!("LobbyManager: Unknown game type '{}'. Defaulting to HelloWorldGame.", unknown);
+                            let game_engine = HelloWorldGame::new();
+                            actual_game_type_created = game_engine.game_type();
+                            lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
+                                lobby_id,
+                                32,
+                                manager_handle_clone,
+                                game_engine,
+                            );
+                        }
+                    };
                     self.lobbies.insert(lobby_id, lobby_actor_handle);
-                    let _ = respond_to.send(LobbyDetails { lobby_id });
+                    let _ = respond_to.send(LobbyDetails {
+                        lobby_id,
+                        game_type_created: actual_game_type_created,
+                    });
                 } else {
-                    tracing::error!(
-                        "LobbyManager Actor: Self handle not set, cannot create lobby actor."
-                    );
-                    // respond_to will be dropped, client will get an error
+                    tracing::error!("LobbyManager: Self handle not set.");
                 }
             }
             LobbyManagerMessage::GetLobbyHandle {
@@ -415,10 +364,7 @@ impl LobbyManagerActor {
                 if self.lobbies.remove(&lobby_id).is_some() {
                     tracing::info!("LobbyManager Actor: Removed handle for lobby {}", lobby_id);
                 } else {
-                    tracing::warn!(
-                        "LobbyManager Actor: Received shutdown for unknown/already removed lobby {}",
-                        lobby_id
-                    );
+                    tracing::warn!("LobbyManager Actor: Received shutdown for unknown/already removed lobby {}", lobby_id);
                 }
             }
         }
@@ -444,21 +390,29 @@ impl LobbyManagerHandle {
         let mut actor = LobbyManagerActor::new(receiver);
         let handle = Self {
             sender: sender.clone(),
-        }; // Create handle first
-        actor.set_self_handle(handle.clone()); // Give the actor its own handle
+        };
+        actor.set_self_handle(handle.clone());
         tokio::spawn(run_lobby_manager_actor(actor));
         handle
     }
 
-    async fn create_lobby(&self) -> Result<LobbyDetails, String> {
+    // Update create_lobby to accept optional game type string
+    async fn create_lobby(
+        &self,
+        requested_game_type: Option<String>,
+    ) -> Result<LobbyDetails, String> {
         let (respond_to, rx) = oneshot::channel();
         self.sender
-            .send(LobbyManagerMessage::CreateLobby { respond_to })
+            .send(LobbyManagerMessage::CreateLobby {
+                requested_game_type,
+                respond_to,
+            })
             .await
             .map_err(|e| format!("Failed to send CreateLobby to manager: {}", e))?;
         rx.await
             .map_err(|e| format!("LobbyManager failed to respond to CreateLobby: {}", e))
     }
+    // get_lobby_handle and notify_lobby_shutdown remain the same.
 
     async fn get_lobby_handle(&self, lobby_id: Uuid) -> Option<LobbyActorHandle> {
         let (respond_to, rx) = oneshot::channel();
@@ -471,7 +425,7 @@ impl LobbyManagerHandle {
             .await
             .is_err()
         {
-            return None; // Manager likely shut down
+            return None;
         }
         rx.await.unwrap_or(None)
     }
@@ -484,18 +438,36 @@ impl LobbyManagerHandle {
     }
 }
 
-// --- AppState ---
+// --- AppState (remains the same) ---
 #[derive(Clone)]
 struct AppState {
     lobby_manager: LobbyManagerHandle,
 }
 
 // --- HTTP Handlers ---
+// For create_lobby_handler, we need to accept a JSON payload for game_type
+#[derive(Deserialize, Debug, Default)] // Default allows optional body or empty {}
+struct CreateLobbyRequest {
+    game_type: Option<String>,
+}
+
 async fn create_lobby_handler(
     State(app_state): State<AppState>,
+    // Use axum::Json to deserialize the request body.
+    // If the client sends an empty body or no body, and CreateLobbyRequest derives Default,
+    // Axum 0.7+ can often handle this gracefully by using the default.
+    // For robustness, client should send at least `{}` or `{"game_type": null}`
+    Json(payload): Json<CreateLobbyRequest>,
 ) -> Result<Json<LobbyDetails>, StatusCode> {
-    tracing::info!("HTTP: Received create_lobby request");
-    match app_state.lobby_manager.create_lobby().await {
+    tracing::info!(
+        "HTTP: Received create_lobby request with payload: {:?}",
+        payload
+    );
+    match app_state
+        .lobby_manager
+        .create_lobby(payload.game_type)
+        .await
+    {
         Ok(details) => Ok(Json(details)),
         Err(e) => {
             tracing::error!("Failed to create lobby: {}", e);
@@ -504,10 +476,12 @@ async fn create_lobby_handler(
     }
 }
 
+// ws_handler and handle_socket remain the same, as they deal with establishing
+// the WebSocket connection and passing generic messages, not game-specific logic.
 // --- WebSocket Handler ---
 async fn ws_handler(
     ws_upgrade: WebSocketUpgrade,
-    Path(lobby_id_str): Path<String>, // Extract lobby_id from path
+    Path(lobby_id_str): Path<String>,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     let lobby_id = match Uuid::parse_str(&lobby_id_str) {
@@ -518,14 +492,13 @@ async fn ws_handler(
         }
     };
 
-    let client_id = Uuid::new_v4(); // Unique ID for this WebSocket connection
+    let client_id = Uuid::new_v4();
     tracing::info!(
         "WebSocket: Connection attempt for lobby {}, client {}",
         lobby_id,
         client_id
     );
 
-    // Get the handle for the specific lobby actor
     let lobby_handle = match app_state.lobby_manager.get_lobby_handle(lobby_id).await {
         Some(handle) => handle,
         None => {
@@ -538,140 +511,110 @@ async fn ws_handler(
         }
     };
 
-    ws_upgrade.on_upgrade(move |socket| {
-        handle_socket(socket, client_id, lobby_handle) // Pass lobby_handle
-    })
+    ws_upgrade.on_upgrade(move |socket| handle_socket(socket, client_id, lobby_handle))
 }
 
-async fn handle_socket(
-    socket: WebSocket, // Renamed from mut socket as we'll split it
-    client_id: Uuid,
-    lobby_handle: LobbyActorHandle,
-) {
+async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyActorHandle) {
     tracing::info!(
         "WebSocket: Client {} now fully handling connection for lobby {}",
         client_id,
         lobby_handle.lobby_id
     );
 
-    // Split the WebSocket into a sender and receiver.
     let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (actor_to_client_tx, mut actor_to_client_rx) = mpsc::channel::<ws::Message>(32);
 
-    // Create an mpsc channel for messages from the LobbyActor to this client's WebSocket.
-    // The LobbyActor will hold the `actor_to_client_tx`.
-    // This task will listen on `actor_to_client_rx` and send messages to `ws_sender`.
-    let (actor_to_client_tx, mut actor_to_client_rx) = mpsc::channel::<ws::Message>(32); // Buffer size of 32 for messages to this client
-
-    // Notify the lobby actor that a new client has connected, providing the sender half of the channel.
     lobby_handle
         .client_connected(client_id, actor_to_client_tx)
         .await;
 
-    // Task to forward messages from LobbyActor (via actor_to_client_rx) to the WebSocket client (ws_sender)
-    let lobby_id_clone_for_send_task = lobby_handle.lobby_id; // Clone for the send task
-    let client_id_clone_for_send_task = client_id; // Clone for the send task
+    let lobby_id_clone_send = lobby_handle.lobby_id;
+    let client_id_clone_send = client_id;
     let mut send_task = tokio::spawn(async move {
         while let Some(message_to_send) = actor_to_client_rx.recv().await {
             if ws_sender.send(message_to_send).await.is_err() {
                 tracing::info!(
                     "Client {} in lobby {}: WS send error (from actor), client likely disconnected.",
-                    client_id_clone_for_send_task, lobby_id_clone_for_send_task
+                    client_id_clone_send, lobby_id_clone_send
                 );
-                break; // Error sending, socket is likely closed.
+                break;
             }
         }
-        // If the loop breaks, it means actor_to_client_tx was dropped (actor shut down or removed client)
-        // or ws_sender.send failed.
         tracing::debug!(
             "Client {} in lobby {}: Send task from actor to WS client terminating.",
-            client_id_clone_for_send_task,
-            lobby_id_clone_for_send_task
+            client_id_clone_send,
+            lobby_id_clone_send
         );
     });
 
-    // Task to handle incoming messages from the WebSocket client (ws_receiver)
-    // and forward them to the LobbyActor.
-    let lobby_handle_clone_for_recv_task = lobby_handle.clone(); // Clone for the receive task
-    let client_id_clone_for_recv_task = client_id; // Clone for the receive task
-    let lobby_id_clone_for_recv_task = lobby_handle.lobby_id;
+    let lobby_handle_clone_recv = lobby_handle.clone();
+    let client_id_clone_recv = client_id;
+    let lobby_id_clone_recv = lobby_handle.lobby_id;
     let mut recv_task = tokio::spawn(async move {
         loop {
             match ws_receiver.next().await {
-                Some(Ok(msg)) => {
-                    match msg {
-                        ws::Message::Text(text_msg) => {
-                            tracing::debug!(
-                                "Client {} in lobby {}: Received text from WS: {:?}",
-                                client_id_clone_for_recv_task,
-                                lobby_id_clone_for_recv_task,
-                                text_msg
+                Some(Ok(msg)) => match msg {
+                    ws::Message::Text(text_msg) => {
+                        tracing::debug!(
+                            "Client {} in lobby {}: Received text from WS: {:?}",
+                            client_id_clone_recv,
+                            lobby_id_clone_recv,
+                            text_msg
+                        );
+                        if let Err(e) = lobby_handle_clone_recv
+                            .process_event(client_id_clone_recv, text_msg.to_string())
+                            .await
+                        {
+                            tracing::error!(
+                                "Client {} in lobby {}: Error sending event to actor: {}",
+                                client_id_clone_recv,
+                                lobby_id_clone_recv,
+                                e
                             );
-
-                            // Send the event to the lobby actor
-                            // No direct response expected here anymore, actor sends via its channel
-                            if let Err(e) = lobby_handle_clone_for_recv_task
-                                .process_event(client_id_clone_for_recv_task, text_msg.to_string())
-                                .await
-                            {
-                                tracing::error!(
-                                    "Client {} in lobby {}: Error sending event to actor: {}",
-                                    client_id_clone_for_recv_task,
-                                    lobby_id_clone_for_recv_task,
-                                    e
-                                );
-                                // Optionally, you could try to send an error back to the client
-                                // via the actor_to_client_tx if it was still held by the actor,
-                                // but it's simpler to let the actor handle all outbound comms.
-                                // For now, we just log.
-                            }
-                        }
-                        ws::Message::Binary(_) => {
-                            tracing::debug!(
-                                "Client {} in lobby {}: Received binary message (ignored)",
-                                client_id_clone_for_recv_task,
-                                lobby_id_clone_for_recv_task
-                            );
-                        }
-                        ws::Message::Ping(_) | ws::Message::Pong(_) => {}
-                        ws::Message::Close(_) => {
-                            tracing::info!(
-                                "Client {} in lobby {}: WebSocket closed by client (recv).",
-                                client_id_clone_for_recv_task,
-                                lobby_id_clone_for_recv_task
-                            );
-                            break; // Client initiated close
                         }
                     }
-                }
+                    ws::Message::Binary(_) => {
+                        tracing::debug!(
+                            "Client {} in lobby {}: Received binary message (ignored)",
+                            client_id_clone_recv,
+                            lobby_id_clone_recv
+                        );
+                    }
+                    ws::Message::Ping(_) | ws::Message::Pong(_) => {}
+                    ws::Message::Close(_) => {
+                        tracing::info!(
+                            "Client {} in lobby {}: WebSocket closed by client (recv).",
+                            client_id_clone_recv,
+                            lobby_id_clone_recv
+                        );
+                        break;
+                    }
+                },
                 Some(Err(e)) => {
                     tracing::warn!(
                         "Client {} in lobby {}: WebSocket error (recv): {}",
-                        client_id_clone_for_recv_task,
-                        lobby_id_clone_for_recv_task,
+                        client_id_clone_recv,
+                        lobby_id_clone_recv,
                         e
                     );
-                    break; // Connection error
+                    break;
                 }
                 None => {
                     tracing::info!(
                         "Client {} in lobby {}: WebSocket connection closed (recv - no more messages).",
-                        client_id_clone_for_recv_task,
-                        lobby_id_clone_for_recv_task
+                        client_id_clone_recv, lobby_id_clone_recv
                     );
-                    break; // Connection closed
+                    break;
                 }
             }
         }
         tracing::debug!(
             "Client {} in lobby {}: Receive task from WS client to actor terminating.",
-            client_id_clone_for_recv_task,
-            lobby_id_clone_for_recv_task
+            client_id_clone_recv,
+            lobby_id_clone_recv
         );
     });
 
-    // Wait for either task to complete.
-    // If one task finishes (e.g., recv_task due to client disconnect),
-    // we want to abort the other to clean up resources.
     tokio::select! {
         _ = (&mut send_task) => {
             recv_task.abort();
@@ -683,8 +626,6 @@ async fn handle_socket(
         },
     }
 
-    // Notify the lobby actor that the client has disconnected
-    // This ensures the actor cleans up the client's sender channel from its map.
     lobby_handle.client_disconnected(client_id).await;
     tracing::info!(
         "WebSocket: Client {} fully disconnected from lobby {}",
@@ -693,6 +634,7 @@ async fn handle_socket(
     );
 }
 
+// Config structs remain the same
 #[derive(Debug, Deserialize)]
 struct ServerConfig {
     port: u16,
@@ -702,43 +644,47 @@ struct ServerConfig {
 #[derive(Debug, Deserialize)]
 struct AppConfig {
     server: ServerConfig,
-    admin_password: Vec<String>,
+    admin_password: Vec<String>, // Example, not used in this flow
 }
 
-// --- Main Application Setup ---
+// --- Main Application Setup (remains largely the same) ---
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 format!("{}=info,tower_http=debug", env!("CARGO_PKG_NAME")).into()
+                // Ensure your package name is correct or use a generic filter
             }),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let lobby_manager_handle = LobbyManagerHandle::new(32); // Create the central manager actor
+    let lobby_manager_handle = LobbyManagerHandle::new(32);
 
+    // --- Config Loading (remains the same) ---
     let settings = Config::builder()
         .add_source(
-            config::Environment::with_prefix("KOLMODIN")
+            config::Environment::with_prefix("KOLMODIN") // Ensure this prefix is correct for your env vars
                 .separator("__")
                 .list_separator(",")
                 .with_list_parse_key("admin_password")
                 .with_list_parse_key("server.cors_origins")
                 .try_parsing(true),
         )
-        .add_source(config::File::with_name("config").required(false))
+        .add_source(config::File::with_name("config").required(false)) // e.g., config.toml
         .build()
         .map_err(|e| format!("Failed to build config: {e}"))?;
 
     let app_config: AppConfig = settings
         .try_deserialize()
         .map_err(|e| format!("Failed to parse config: {e}"))?;
+
     let app_state = AppState {
         lobby_manager: lobby_manager_handle,
     };
-    let cors_origins: Vec<HeaderValue> = app_config
+
+    let cors_origins_result: Result<Vec<HeaderValue>, _> = app_config
         .server
         .cors_origins
         .iter()
@@ -747,26 +693,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .parse()
                 .map_err(|e| format!("Invalid CORS origin '{origin}': {e}"))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
 
-    let cors = CorsLayer::new()
-        .allow_methods(vec![http::Method::GET, http::Method::POST])
-        .allow_origin(cors_origins)
-        .allow_credentials(true)
-        .allow_headers(vec![
-            http::header::CONTENT_TYPE,
-            http::header::AUTHORIZATION,
-            http::header::ACCEPT,
-        ]);
+    let cors_origins = match cors_origins_result {
+        Ok(origins) => origins,
+        Err(e) => {
+            // It's better to fail early if CORS origins are misconfigured.
+            // Or provide a sensible default like an empty vec if no origins are critical.
+            tracing::error!("CORS configuration error: {}. Defaulting to no specific origins allowed beyond simple requests if any.", e);
+            // Depending on strictness, you might panic or use a very restrictive default.
+            // For development, you might allow all if the vec is empty, but that's not good for prod.
+            // For this example, if parsing fails, it will likely restrict CORS significantly.
+            // Let's assume if this fails, an empty vec is used, meaning restrictive CORS.
+            vec![]
+        }
+    };
+
+    let cors = if !cors_origins.is_empty() {
+        CorsLayer::new()
+            .allow_methods(vec![http::Method::GET, http::Method::POST])
+            .allow_origin(cors_origins) // This applies the parsed origins
+            .allow_credentials(true)
+            .allow_headers(vec![
+                http::header::CONTENT_TYPE,
+                http::header::AUTHORIZATION,
+                http::header::ACCEPT,
+            ])
+    } else {
+        // A default, possibly more restrictive CORS policy if no origins were configured or parsed correctly
+        // Or, if you want to allow any origin for development when cors_origins is empty (use with caution):
+        // CorsLayer::new().allow_origin(tower_http::cors::Any).allow_methods(...).allow_headers(...)
+        // For now, let's make it a layer that does minimal (effectively restrictive if no origins match)
+        CorsLayer::new() // This will require origins to be set to actually allow cross-origin
+    };
 
     let app = Router::new()
         .route("/api/create-lobby", post(create_lobby_handler))
-        // Note: Path segment for lobby_id
-        .route("/ws/{lobby_id}", any(ws_handler))
+        .route("/ws/{lobby_id}", any(ws_handler)) // Ensure path parameter matches
         .with_state(app_state)
         .layer(cors);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // Use port from config or default
+    let port = app_config.server.port; // Assuming port is part of your ServerConfig
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!("Listening on {}", addr);
 
     axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
