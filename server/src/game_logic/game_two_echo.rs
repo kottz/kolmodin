@@ -1,6 +1,4 @@
-// src/game_logic/game_two_echo.rs
-
-use super::GameLogic; // Use the trait from the parent module
+use super::GameLogic;
 use axum::extract::ws;
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
@@ -19,14 +17,8 @@ impl GameTwoEcho {
     }
 }
 
-// No #[async_trait] needed
 impl GameLogic for GameTwoEcho {
-    async fn client_connected(
-        // Now a regular async fn
-        &mut self,
-        client_id: Uuid,
-        client_tx: TokioMpscSender<ws::Message>,
-    ) {
+    async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         tracing::info!("GameTwoEcho: Client {} connected.", client_id);
         self.clients.insert(client_id, client_tx);
     }
