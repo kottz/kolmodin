@@ -78,19 +78,18 @@ impl GameLogic for GameTwoEcho {
             }
             "broadcast_except_self" => {
                 for (target_id, tx) in &self.clients {
-                    if *target_id != client_id {
-                        if tx
+                    if *target_id != client_id
+                        && tx
                             .send(ws::Message::Text(
                                 format!("Broadcast (others): {}", message_to_send).into(),
                             ))
                             .await
                             .is_err()
-                        {
-                            tracing::warn!(
-                                "GameTwoEcho: Failed to broadcast (others) to {}",
-                                target_id
-                            );
-                        }
+                    {
+                        tracing::warn!(
+                            "GameTwoEcho: Failed to broadcast (others) to {}",
+                            target_id
+                        );
                     }
                 }
             }

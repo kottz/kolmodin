@@ -78,19 +78,18 @@ impl GameLogic for HelloWorldGame {
             }
             "broadcast_except_self" => {
                 for (target_id, tx) in &self.clients {
-                    if *target_id != client_id {
-                        if tx
+                    if *target_id != client_id
+                        && tx
                             .send(ws::Message::Text(
                                 format!("Game1 Broadcast (others): {}", message_to_send).into(),
                             ))
                             .await
                             .is_err()
-                        {
-                            tracing::warn!(
-                                "HelloWorldGame: Failed to broadcast (others) to {}",
-                                target_id
-                            );
-                        }
+                    {
+                        tracing::warn!(
+                            "HelloWorldGame: Failed to broadcast (others) to {}",
+                            target_id
+                        );
                     }
                 }
             }

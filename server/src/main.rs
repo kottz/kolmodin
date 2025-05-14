@@ -644,7 +644,6 @@ struct ServerConfig {
 #[derive(Debug, Deserialize)]
 struct AppConfig {
     server: ServerConfig,
-    admin_password: Vec<String>, // Example, not used in this flow
 }
 
 // --- Main Application Setup (remains largely the same) ---
