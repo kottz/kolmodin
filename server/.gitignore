@@ -4,3 +4,4 @@ config.prod.toml
 config.dev.sh
 config.prod.sh
 fly.toml
+.twitch_key
