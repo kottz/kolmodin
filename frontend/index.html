@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Axum WebSocket Game Client</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="container">
         <h1>WebSocket Game Client</h1>
@@ -13,7 +15,14 @@
         <div class="section">
             <h2>1. Lobby Management</h2>
             <button id="createLobbyBtn">Create New Lobby</button>
-            <p>Current Lobby ID: <strong id="lobbyIdDisplay">-</strong></p>
+            <label for="gameTypeSelect" style="margin-left: 10px;">Game Type:</label>
+            <select id="gameTypeSelect">
+                <option value="default">Default (HelloWorld)</option>
+                <option value="gametwoecho">GameTwoEcho</option>
+                <!-- Add more game types here as you create them -->
+            </select>
+            <p>Current Lobby ID: <strong id="lobbyIdDisplay">-</strong> (Game: <span
+                    id="gameTypeCreatedDisplay">-</span>)</p>
         </div>
 
         <div class="section">
@@ -39,4 +48,5 @@
 
     <script src="script.js"></script>
 </body>
+
 </html>

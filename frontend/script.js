@@ -1,22 +1,23 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- DOM Elements ---
     const createLobbyBtn = document.getElementById('createLobbyBtn');
+    const gameTypeSelect = document.getElementById('gameTypeSelect'); // Get game type selector
     const lobbyIdDisplay = document.getElementById('lobbyIdDisplay');
+    const gameTypeCreatedDisplay = document.getElementById('gameTypeCreatedDisplay'); // For showing created game type
     const lobbyIdInput = document.getElementById('lobbyIdInput');
     const connectBtn = document.getElementById('connectBtn');
     const disconnectBtn = document.getElementById('disconnectBtn');
     const connectionStatus = document.getElementById('connectionStatus');
     const logOutput = document.getElementById('logOutput');
-    const messageInput = document.getElementById('messageInput'); // Get the message input
+    const messageInput = document.getElementById('messageInput');
 
-    // --- New Buttons for Sending Commands ---
     const sendMessageSection = document.getElementById('sendMessageSection');
 
     const sendToSelfBtn = document.createElement('button');
     sendToSelfBtn.id = 'sendToSelfBtn';
     sendToSelfBtn.textContent = 'Send to Self';
     sendToSelfBtn.style.marginRight = '10px';
-    sendToSelfBtn.style.marginTop = '5px'; // Add some top margin
+    sendToSelfBtn.style.marginTop = '5px';
 
     const broadcastAllBtn = document.createElement('button');
     broadcastAllBtn.id = 'broadcastAllBtn';
@@ -30,7 +31,6 @@ document.addEventListener('DOMContentLoaded', () => {
     broadcastOthersBtn.style.marginTop = '5px';
 
     if (sendMessageSection) {
-        // Append new buttons after the messageInput
         sendMessageSection.appendChild(sendToSelfBtn);
         sendMessageSection.appendChild(broadcastAllBtn);
         sendMessageSection.appendChild(broadcastOthersBtn);
@@ -38,12 +38,10 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error("Could not find the 'sendMessageSection' to add new buttons.");
     }
 
-    // --- WebSocket and Server Configuration ---
     let webSocket = null;
     const SERVER_HTTP_URL = 'http://localhost:3000';
     const SERVER_WS_URL = 'ws://localhost:3000';
 
-    // --- Logging Function ---
     function logMessage(message, type = 'system') {
         const p = document.createElement('p');
         p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
@@ -52,14 +50,13 @@ document.addEventListener('DOMContentLoaded', () => {
         logOutput.scrollTop = logOutput.scrollHeight;
     }
 
-    // --- UI Update Functions ---
     function updateUIConnected(lobbyId) {
         connectionStatus.textContent = `Connected to Lobby: ${lobbyId}`;
         connectionStatus.style.color = 'green';
         connectBtn.disabled = true;
         lobbyIdInput.disabled = true;
         disconnectBtn.disabled = false;
-        messageInput.disabled = false; // Enable message input
+        messageInput.disabled = false;
 
         sendToSelfBtn.disabled = false;
         broadcastAllBtn.disabled = false;
@@ -72,8 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
         lobbyIdInput.disabled = false;
         connectBtn.disabled = lobbyIdInput.value.trim() === '';
         disconnectBtn.disabled = true;
-        messageInput.disabled = true; // Disable message input
-        messageInput.value = ''; // Clear message input
+        messageInput.disabled = true;
+        messageInput.value = '';
 
         sendToSelfBtn.disabled = true;
         broadcastAllBtn.disabled = true;
@@ -82,7 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
         webSocket = null;
     }
 
-    // --- Event Listeners for UI Elements ---
     lobbyIdInput.addEventListener('input', () => {
         if (lobbyIdInput.value.trim() !== '' && !webSocket) {
             connectBtn.disabled = false;
@@ -93,19 +89,49 @@ document.addEventListener('DOMContentLoaded', () => {
 
     createLobbyBtn.addEventListener('click', async () => {
         logMessage('Attempting to create lobby...');
+        const selectedGameType = gameTypeSelect.value;
+
+        // Prepare the payload for the server
+        const payload = {
+            // Send null if 'default' is selected, so server uses its default.
+            // Otherwise, send the selected game type string.
+            game_type: selectedGameType === 'default' ? null : selectedGameType
+        };
+
         try {
             const response = await fetch(`${SERVER_HTTP_URL}/api/create-lobby`, {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json', // Crucial header
+                },
+                body: JSON.stringify(payload), // Send the JSON payload
             });
+
             if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+                // Attempt to get more specific error message from server if available
+                let errorText = `HTTP error! status: ${response.status}`;
+                try {
+                    const errorData = await response.json(); // Axum often sends JSON error responses
+                    if (errorData && errorData.message) { // Check for a common error message pattern
+                        errorText += ` - ${errorData.message}`;
+                    } else {
+                        const text = await response.text(); // Fallback to plain text
+                        errorText += ` - ${text}`;
+                    }
+                } catch (e) {
+                    // If parsing error response fails, just use the status
+                }
+                throw new Error(errorText);
             }
-            const data = await response.json();
+
+            const data = await response.json(); // Expecting LobbyDetails { lobby_id, game_type_created }
             const newLobbyId = data.lobby_id;
+            const gameCreated = data.game_type_created;
+
             lobbyIdDisplay.textContent = newLobbyId;
+            gameTypeCreatedDisplay.textContent = gameCreated; // Display the game type created by server
             lobbyIdInput.value = newLobbyId;
-            logMessage(`Lobby created: ${newLobbyId}`, 'system');
+            logMessage(`Lobby created: ${newLobbyId} (Game: ${gameCreated})`, 'system');
             if (!webSocket) connectBtn.disabled = false;
         } catch (error) {
             logMessage(`Error creating lobby: ${error.message}`, 'error');
@@ -167,27 +193,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- Function to Send Commands with Message Payload via WebSocket ---
     function sendCommandWithMessage(commandType) {
         if (webSocket && webSocket.readyState === WebSocket.OPEN) {
             const userMessage = messageInput.value.trim();
-            if (userMessage === "") {
+            if (commandType !== "some_command_without_payload" && userMessage === "") { // Example if some commands don't need payload
                 logMessage("Please type a message before sending.", "error");
                 messageInput.focus();
                 return;
             }
-            // Format: COMMAND_TYPE<space>Actual message
             const fullMessage = `${commandType} ${userMessage}`;
             logMessage(`Sending: ${fullMessage}`, 'sent');
             webSocket.send(fullMessage);
-            // Optionally clear the input after sending
-            // messageInput.value = '';
         } else {
             logMessage('WebSocket is not connected. Cannot send command.', 'error');
         }
     }
 
-    // --- Event Listeners for New Command Buttons ---
     sendToSelfBtn.addEventListener('click', () => {
         sendCommandWithMessage("send_to_self");
     });
@@ -200,6 +221,5 @@ document.addEventListener('DOMContentLoaded', () => {
         sendCommandWithMessage("broadcast_except_self");
     });
 
-    // --- Initial UI State ---
     updateUIDisconnected();
 });
