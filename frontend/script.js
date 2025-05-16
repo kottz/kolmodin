@@ -1,4 +1,9 @@
+// script.js
+window.gameHandlers = window.gameHandlers || {}; // Ensure it exists
+
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Global Game Handler Registry ---
+
     // --- DOM Elements ---
     const createLobbyBtn = document.getElementById('createLobbyBtn');
     const gameTypeSelect = document.getElementById('gameTypeSelect');
@@ -12,77 +17,82 @@ document.addEventListener('DOMContentLoaded', () => {
     const connectionStatus = document.getElementById('connectionStatus');
     const twitchIrcStatusDisplay = document.getElementById('twitchIrcStatusDisplay');
     const logOutput = document.getElementById('logOutput');
-    const messageInput = document.getElementById('messageInput');
-    const sendMessageSection = document.getElementById('sendMessageSection');
 
-    // --- Dynamic Buttons ---
-    const sendToSelfBtn = document.createElement('button');
-    const broadcastAllBtn = document.createElement('button');
-    const echoBtn = document.createElement('button'); // New button for Echo command
+    // Game Specific UI
+    const currentGameTypeDisplay = document.getElementById('currentGameTypeDisplay');
+    const gameSpecificControls = document.getElementById('gameSpecificControls');
+    const latestGameEventOutput = document.getElementById('latestGameEventOutput');
 
-    sendToSelfBtn.id = 'sendToSelfBtn';
-    sendToSelfBtn.textContent = 'Send to Self (Private)';
-    sendToSelfBtn.style.marginRight = '10px';
-    sendToSelfBtn.style.marginTop = '5px';
-
-    broadcastAllBtn.id = 'broadcastAllBtn';
-    broadcastAllBtn.textContent = 'Broadcast to All';
-    broadcastAllBtn.style.marginRight = '10px';
-    broadcastAllBtn.style.marginTop = '5px';
-
-    echoBtn.id = 'echoBtn';
-    echoBtn.textContent = 'Echo Message';
-    echoBtn.style.marginTop = '5px';
-
-
-    if (sendMessageSection) {
-        sendMessageSection.appendChild(echoBtn);
-        sendMessageSection.appendChild(sendToSelfBtn);
-        sendMessageSection.appendChild(broadcastAllBtn);
-    } else {
-        console.error("Could not find the 'sendMessageSection' to add new buttons.");
-    }
+    // Global Commands UI
+    const globalMessageInput = document.getElementById('globalMessageInput');
+    const globalEchoBtn = document.getElementById('globalEchoBtn');
 
 
     let webSocket = null;
+    let currentLobbyId = null;
+    let activeGameType = null; // To store the game_type_id of the connected game
+
     // --- Configuration ---
-    const SERVER_PORT = 3000; // Match your Rust server's port
+    const SERVER_PORT = 3000;
     const SERVER_HTTP_URL = `http://localhost:${SERVER_PORT}`;
     const SERVER_WS_URL = `ws://localhost:${SERVER_PORT}`;
 
     function logMessage(message, type = 'system') {
         const p = document.createElement('p');
         p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-        p.classList.add(`log-${type}`);
+        p.className = `log-${type}`; // Use className for single class
         logOutput.appendChild(p);
-        logOutput.scrollTop = logOutput.scrollHeight;
+        logOutput.scrollTop = logOutput.scrollHeight; // Auto-scroll
     }
 
-    function updateUIConnected(lobbyId) {
+    function updateUIConnected(lobbyId, gameType) {
         connectionStatus.textContent = `Connected to Lobby: ${lobbyId}`;
         connectionStatus.style.color = 'green';
         connectBtn.disabled = true;
         lobbyIdInput.disabled = true;
         disconnectBtn.disabled = false;
-        messageInput.disabled = false;
-        sendToSelfBtn.disabled = false;
-        broadcastAllBtn.disabled = false;
-        echoBtn.disabled = false;
+
+        activeGameType = gameType;
+        currentGameTypeDisplay.textContent = gameType || "Unknown Game";
+        loadGameUI(gameType);
+        globalMessageInput.disabled = false;
+        globalEchoBtn.disabled = false;
     }
 
     function updateUIDisconnected() {
         connectionStatus.textContent = 'Not Connected';
         connectionStatus.style.color = 'red';
-        twitchIrcStatusDisplay.textContent = 'N/A'; // Reset Twitch status
+        twitchIrcStatusDisplay.textContent = 'N/A';
         lobbyIdInput.disabled = false;
         connectBtn.disabled = lobbyIdInput.value.trim() === '';
         disconnectBtn.disabled = true;
-        messageInput.disabled = true;
-        messageInput.value = '';
-        sendToSelfBtn.disabled = true;
-        broadcastAllBtn.disabled = true;
-        echoBtn.disabled = true;
+
+        activeGameType = null;
+        currentGameTypeDisplay.textContent = "No Game Active";
+        gameSpecificControls.innerHTML = '<p>Connect to a lobby with an active game to see controls.</p>';
+        latestGameEventOutput.textContent = 'No game-specific event received yet.';
+        globalMessageInput.disabled = true;
+        globalMessageInput.value = '';
+        globalEchoBtn.disabled = true;
+
+        currentLobbyId = null;
+        if (webSocket) {
+            webSocket.onopen = null;
+            webSocket.onmessage = null;
+            webSocket.onerror = null;
+            webSocket.onclose = null;
+            // webSocket.close(); // Server should handle forceful close if needed on its end
+        }
         webSocket = null;
+    }
+
+    function loadGameUI(gameTypeId) {
+        gameSpecificControls.innerHTML = ''; // Clear previous
+        if (gameTypeId && window.gameHandlers[gameTypeId] && typeof window.gameHandlers[gameTypeId].initUI === 'function') {
+            window.gameHandlers[gameTypeId].initUI(gameSpecificControls, sendGameSpecificCommandToServer);
+        } else {
+            gameSpecificControls.innerHTML = `<p>No UI handler registered for game type: ${gameTypeId || 'Unknown'}. Generic commands may still work.</p>`;
+        }
     }
 
     lobbyIdInput.addEventListener('input', () => {
@@ -91,12 +101,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     createLobbyBtn.addEventListener('click', async () => {
         logMessage('Attempting to create lobby...');
-        const selectedGameType = gameTypeSelect.value;
+        const selectedGameType = gameTypeSelect.value; // This is now directly the game_type_id
         const requestedTwitchChannel = twitchChannelInput.value.trim();
 
         const payload = {
-            game_type: selectedGameType === 'default' ? null : selectedGameType,
-            twitch_channel: requestedTwitchChannel ? requestedTwitchChannel : null
+            game_type: selectedGameType, // Send the selected game_type_id
+            twitch_channel: requestedTwitchChannel || null
         };
 
         try {
@@ -106,31 +116,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify(payload),
             });
 
+            const responseData = await response.json();
             if (!response.ok) {
-                let errorText = `HTTP error! status: ${response.status}`;
-                try {
-                    const errorData = await response.json(); // Server sends JSON for errors too now if using the Json Error type
-                    errorText = (errorData && errorData.message) ? errorData.message : `Server error: ${response.statusText}`;
-                } catch (e) {
-                    // If server sends (StatusCode, String) for error
-                    try {
-                        errorText = await response.text();
-                    } catch (e2) { /* ignore */ }
-                }
-                throw new Error(errorText);
+                throw new Error(responseData.message || `HTTP error! status: ${response.status}`);
             }
 
-            const data = await response.json();
-            const newLobbyId = data.lobby_id;
-            const gameCreated = data.game_type_created;
-            const twitchSubscribed = data.twitch_channel_subscribed || '-';
+            currentLobbyId = responseData.lobby_id;
+            const gameCreated = responseData.game_type_created; // This should be the actual game_type_id
+            const twitchSubscribed = responseData.twitch_channel_subscribed || '-';
 
-            lobbyIdDisplay.textContent = newLobbyId;
+            lobbyIdDisplay.textContent = currentLobbyId;
             gameTypeCreatedDisplay.textContent = gameCreated;
             twitchChannelSubscribedDisplay.textContent = twitchSubscribed;
-            lobbyIdInput.value = newLobbyId;
-            logMessage(`Lobby created: ${newLobbyId} (Game: ${gameCreated}, Twitch: ${twitchSubscribed})`, 'system');
+            lobbyIdInput.value = currentLobbyId;
+            logMessage(`Lobby created: ${currentLobbyId} (Game: ${gameCreated}, Twitch: ${twitchSubscribed})`, 'system');
             if (!webSocket) connectBtn.disabled = false;
+
+            // Automatically connect if a lobby is successfully created and we're not already connected.
+            // if (!webSocket && currentLobbyId) {
+            //     connectBtn.click();
+            // }
         } catch (error) {
             logMessage(`Error creating lobby: ${error.message}`, 'error');
             console.error('Error creating lobby:', error);
@@ -138,8 +143,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     connectBtn.addEventListener('click', () => {
-        const lobbyId = lobbyIdInput.value.trim();
-        if (!lobbyId) {
+        const lobbyIdToConnect = lobbyIdInput.value.trim();
+        if (!lobbyIdToConnect) {
             logMessage('Please enter a Lobby ID to connect.', 'error');
             return;
         }
@@ -148,8 +153,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        logMessage(`Attempting to connect to lobby: ${lobbyId}...`);
-        const wsUrl = `${SERVER_WS_URL}/ws/${lobbyId}`;
+        currentLobbyId = lobbyIdToConnect; // Store the lobby ID we are connecting to
+        logMessage(`Attempting to connect to lobby: ${currentLobbyId}...`);
+        const wsUrl = `${SERVER_WS_URL}/ws/${currentLobbyId}`;
         try {
             webSocket = new WebSocket(wsUrl);
         } catch (e) {
@@ -160,69 +166,92 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         webSocket.onopen = () => {
-            logMessage(`Successfully connected to WebSocket for lobby: ${lobbyId}`, 'system');
-            updateUIConnected(lobbyId);
+            // We don't know the game_type yet from onopen.
+            // The server should send an initial GameSpecificEvent or GlobalEvent with this info,
+            // or we can infer it from the first GameSpecificEvent.
+            // For now, we'll update UI slightly and wait for messages.
+            logMessage(`Successfully connected to WebSocket for lobby: ${currentLobbyId}`, 'system');
+            // We expect the server to send the game_type, perhaps as part of the first GameStateUpdate
+            // For now, let's assume it's what was displayed in `gameTypeCreatedDisplay`
+            // A more robust way is for the server to send this upon connection.
+            const assumedGameType = gameTypeCreatedDisplay.textContent === '-' ? null : gameTypeCreatedDisplay.textContent;
+            updateUIConnected(currentLobbyId, assumedGameType);
         };
 
         webSocket.onmessage = (event) => {
             const rawMessageData = event.data;
-            logMessage(`Raw Received: ${rawMessageData}`, 'received-raw'); // Log raw data
+            logMessage(`Raw Received: ${rawMessageData}`, 'received-generic');
 
             try {
                 const parsedMessage = JSON.parse(rawMessageData);
-                // `parsedMessage` should now be an object like:
-                // { "event": "EventType", "data": { ...payload... } }
+                // New structure: { "message_type": "...", "payload": { ... } }
+                logMessage(`Parsed Received (${parsedMessage.message_type}): ${JSON.stringify(parsedMessage.payload)}`, 'received-generic');
 
-                logMessage(`Parsed Received (${parsedMessage.event}): ${JSON.stringify(parsedMessage.data)}`, 'received');
-
-                switch (parsedMessage.event) {
-                    case 'EchoResponse':
-                        logMessage(`Server Echo: Original='${parsedMessage.data.original}', Processed='${parsedMessage.data.processed}'`, 'game');
-                        break;
-                    case 'PrivateMessage':
-                        logMessage(`Server Private: ${parsedMessage.data.content}`, 'game');
-                        break;
-                    case 'BroadcastMessage':
-                        logMessage(`Server Broadcast: ${parsedMessage.data.content}`, 'game');
-                        break;
-                    case 'TwitchMessageRelay':
-                        logMessage(`[Twitch Chat #${parsedMessage.data.channel}] ${parsedMessage.data.sender}: ${parsedMessage.data.text}`, 'twitch-chat');
-                        break;
-                    case 'GameUpdate': // For generic game state
-                        logMessage(`Game Update: ${JSON.stringify(parsedMessage.data.update_data)}`, 'game-update');
-                        // You would handle specific game updates based on the content of update_data
-                        break;
-                    case 'Error':
-                        logMessage(`Server Error: ${parsedMessage.data.message}`, 'error');
-                        break;
-                    // --- Handle Twitch Status (This part is more complex as Twitch status is not directly part of ServerToClientMessage yet)
-                    // For now, we'll assume Twitch status updates might come through a generic `GameUpdate` or a custom event if you add one.
-                    // Or, if your LobbyActor sends a special `ServerToClientMessage::GameUpdate` with Twitch status info:
-                    // Example: server sends `{"event":"GameUpdate","data":{"update_data": {"type": "twitch_status", "channel_name": "...", "status_type": "..."}}}`
-                    default:
-                        // This case handles messages that are valid JSON but not one of the recognized events.
-                        // It could also be where your custom Twitch status messages (if not fitting above) might land.
-                        if (parsedMessage.type === 'twitch_status_update' && parsedMessage.data) { // Keeping this for potential direct Twitch status handling
-                            const status = parsedMessage.data;
+                switch (parsedMessage.message_type) {
+                    case 'GlobalEvent':
+                        logMessage(`Global Event (${parsedMessage.payload.event_name}): ${JSON.stringify(parsedMessage.payload.data)}`, 'received-global');
+                        // Handle specific global events if needed
+                        if (parsedMessage.payload.event_name === "LobbyInfo" && parsedMessage.payload.data.game_type_id) {
+                            if (activeGameType !== parsedMessage.payload.data.game_type_id) {
+                                activeGameType = parsedMessage.payload.data.game_type_id;
+                                currentGameTypeDisplay.textContent = activeGameType;
+                                loadGameUI(activeGameType); // Reload UI for the correct game
+                                logMessage(`Game type for lobby ${currentLobbyId} confirmed: ${activeGameType}`, 'system');
+                            }
+                        }
+                        // Example for Twitch status if sent as a GlobalEvent
+                        if (parsedMessage.payload.event_name === "TwitchStatusUpdate" && parsedMessage.payload.data) {
+                            const status = parsedMessage.payload.data;
                             let statusText = `Channel: ${status.channel_name || twitchChannelSubscribedDisplay.textContent}, Status: ${status.status_type}`;
                             if (status.details) statusText += ` (${status.details})`;
                             twitchIrcStatusDisplay.textContent = statusText;
-                            logMessage(`Twitch IRC Status Update: ${statusText}`, 'system-twitch');
-                        } else {
-                            logMessage(`Received unhandled structured message: ${rawMessageData}`, 'system');
+                            logMessage(`Twitch IRC Status Update: ${statusText}`, 'system');
                         }
+                        break;
+
+                    case 'GameSpecificEvent':
+                        logMessage(`Game Event for ${parsedMessage.payload.game_type_id}: ${JSON.stringify(parsedMessage.payload.event_data)}`, 'received-game');
+                        if (activeGameType !== parsedMessage.payload.game_type_id) {
+                            // This means we might have connected without knowing the game type,
+                            // or it changed (less likely for this app's design).
+                            logMessage(`Received event for game ${parsedMessage.payload.game_type_id}, but current active game is ${activeGameType}. Updating active game.`, 'system');
+                            activeGameType = parsedMessage.payload.game_type_id;
+                            currentGameTypeDisplay.textContent = activeGameType;
+                            loadGameUI(activeGameType); // Load UI for the received game type
+                        }
+
+                        // Dispatch to the specific game handler
+                        if (activeGameType && window.gameHandlers[activeGameType] && typeof window.gameHandlers[activeGameType].handleGameEvent === 'function') {
+                            window.gameHandlers[activeGameType].handleGameEvent(parsedMessage.payload.event_data, latestGameEventOutput);
+                        } else {
+                            latestGameEventOutput.textContent = `No handler for ${activeGameType} or event_data missing.\nRaw: ${JSON.stringify(parsedMessage.payload.event_data, null, 2)}`;
+                        }
+                        break;
+
+                    case 'SystemError':
+                        logMessage(`Server System Error: ${parsedMessage.payload.message}`, 'error');
+                        break;
+
+                    case 'TwitchMessageRelay': // This is now a top-level message_type
+                        logMessage(`[Twitch Chat #${parsedMessage.payload.channel}] ${parsedMessage.payload.sender}: ${parsedMessage.payload.text}`, 'twitch-chat');
+                        break;
+
+                    default:
+                        logMessage(`Received unhandled message type: ${parsedMessage.message_type}`, 'system');
+                        latestGameEventOutput.textContent = JSON.stringify(parsedMessage, null, 2); // Show full unknown message
                         break;
                 }
             } catch (e) {
-                // If it's not JSON, it might be an older message format or an unexpected string.
                 logMessage(`Received non-JSON message or parse error: ${rawMessageData}`, 'system');
                 console.warn("Failed to parse message as JSON or unknown structure:", e, rawMessageData);
+                latestGameEventOutput.textContent = `Error parsing message or non-JSON content:\n${rawMessageData}`;
             }
         };
 
         webSocket.onerror = (errorEvent) => {
             logMessage(`WebSocket Error. Check browser console for details.`, 'error');
             console.error('WebSocket Error Event:', errorEvent);
+            // updateUIDisconnected(); // onclose will handle this
         };
 
         webSocket.onclose = (event) => {
@@ -231,7 +260,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (event.reason) reason += ` Reason: ${event.reason}`;
             if (!reason && !event.wasClean) reason = 'Connection failed or closed unexpectedly.';
             else if (!reason && event.wasClean) reason = 'Connection closed cleanly.';
-            logMessage(`WebSocket disconnected. ${reason}`, event.wasClean ? 'system' : 'error');
+
+            logMessage(`WebSocket disconnected from lobby ${currentLobbyId || 'N/A'}. ${reason}`, event.wasClean ? 'system' : 'error');
             updateUIDisconnected();
         };
     });
@@ -244,52 +274,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     /**
-     * Sends a structured command to the WebSocket server.
-     * @param {string} commandName - The 'command' field for ClientToServerMessage (e.g., "Echo", "SendToSelf").
-     * @param {object} payloadData - The data for the 'payload' field.
+     * Sends a generic ClientToServerMessage.
+     * @param {object} messageObject - The full ClientToServerMessage object.
      */
-    function sendStructuredCommand(commandName, payloadData) {
+    function sendGenericToServer(messageObject) {
         if (webSocket && webSocket.readyState === WebSocket.OPEN) {
-            const messageToSend = {
-                command: commandName,
-                payload: payloadData
-            };
-            const jsonMessage = JSON.stringify(messageToSend);
-            logMessage(`Sending Command '${commandName}': ${jsonMessage}`, 'sent');
+            const jsonMessage = JSON.stringify(messageObject);
+            logMessage(`Sending Generic: ${jsonMessage}`, 'sent');
             webSocket.send(jsonMessage);
         } else {
-            logMessage('WebSocket is not connected. Cannot send command.', 'error');
+            logMessage('WebSocket is not connected. Cannot send message.', 'error');
         }
     }
 
-    echoBtn.addEventListener('click', () => {
-        const userMessage = messageInput.value.trim();
+
+    /**
+         * Sends a GameSpecificCommand to the WebSocket server.
+         * @param {string} gameTypeId - The game_type_id for routing.
+         * @param {object} fullCommandData - The complete game-specific command data object
+         *                                   structured as expected by the server's Serde deserialization.
+         */
+    function sendGameSpecificCommandToServer(gameTypeId, fullCommandData) {
+        const messageToSend = {
+            message_type: "GameSpecificCommand",
+            payload: {
+                game_type_id: gameTypeId,
+                command_data: fullCommandData // fullCommandData IS the correctly structured command_data
+            }
+        };
+        sendGenericToServer(messageToSend);
+    }
+
+    globalEchoBtn.addEventListener('click', () => {
+        const userMessage = globalMessageInput.value.trim();
         if (userMessage === "") {
-            logMessage("Please type a message for Echo.", "error");
-            messageInput.focus();
+            logMessage("Please type a message for Global Echo.", "error");
+            globalMessageInput.focus();
             return;
         }
-        sendStructuredCommand("Echo", { message: userMessage });
-    });
-
-    sendToSelfBtn.addEventListener('click', () => {
-        const userMessage = messageInput.value.trim();
-        // if (userMessage === "") { // Optional: decide if empty messages are allowed
-        //     logMessage("Please type a message for SendToSelf.", "error");
-        //     messageInput.focus();
-        //     return;
-        // }
-        sendStructuredCommand("SendToSelf", { message: userMessage });
-    });
-
-    broadcastAllBtn.addEventListener('click', () => {
-        const userMessage = messageInput.value.trim();
-        // if (userMessage === "") { // Optional
-        //     logMessage("Please type a message for BroadcastAll.", "error");
-        //     messageInput.focus();
-        //     return;
-        // }
-        sendStructuredCommand("BroadcastAll", { message: userMessage });
+        const globalCommand = {
+            message_type: "GlobalCommand",
+            payload: {
+                command_name: "Echo", // Example global command name
+                data: { message: userMessage } // Payload for the global command
+            }
+        };
+        sendGenericToServer(globalCommand);
     });
 
     updateUIDisconnected(); // Initial UI state

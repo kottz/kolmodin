@@ -9,13 +9,16 @@ use crate::twitch_integration::ParsedTwitchMessage;
 
 // Add the new messages module and re-export its types
 pub mod messages;
-pub use messages::{ClientToServerMessage, ServerToClientMessage};
+pub use messages::{ClientToServerMessage, ServerToClientMessage}; // These are now generic
 
-mod game_two_echo;
-mod hello_world_game;
+// Game mode modules
+pub mod deal_or_no_deal;
+mod game_two_echo; // Example
+mod hello_world_game; // Example // Your DND game
 
 pub use game_two_echo::GameTwoEcho;
 pub use hello_world_game::HelloWorldGame;
+pub use deal_or_no_deal::DealNoDealGame;
 
 pub trait GameLogic: Send + Sync + Debug {
     fn client_connected(
@@ -26,11 +29,11 @@ pub trait GameLogic: Send + Sync + Debug {
 
     fn client_disconnected(&mut self, client_id: Uuid) -> impl Future<Output = ()> + Send;
 
-    // UPDATED: handle_event now takes a structured message
+    // UPDATED: handle_event now takes the generic structured message
     fn handle_event(
         &mut self,
-        client_id: Uuid,
-        message: ClientToServerMessage, // Changed from String
+        client_id: Uuid,                // The ID of the client sending the command
+        message: ClientToServerMessage, // The generic message wrapper
     ) -> impl Future<Output = ()> + Send;
 
     fn handle_twitch_message(
@@ -40,10 +43,9 @@ pub trait GameLogic: Send + Sync + Debug {
 
     fn is_empty(&self) -> bool;
 
-    fn game_type(&self) -> String {
-        "UnknownGame".to_string()
-    }
+    /// Returns the unique identifier for this game type (e.g., "DealNoDeal").
+    /// This MUST match the `game_type_id` used in messages.
+    fn game_type_id(&self) -> String;
 
-    // NEW: Helper to get a client's sender channel, used by LobbyActor for errors
     fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>>;
 }

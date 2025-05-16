@@ -1,3 +1,4 @@
+/* Existing styles from your file ... */
 body {
     font-family: sans-serif;
     margin: 0;
@@ -16,7 +17,7 @@ body {
     border-radius: 8px;
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     width: 100%;
-    max-width: 700px;
+    max-width: 700px; /* Can increase if needed */
 }
 
 .section {
@@ -39,13 +40,15 @@ h1 {
     margin-bottom: 30px;
 }
 
-input[type="text"] {
+input[type="text"], select { /* Added select styling */
     padding: 10px;
     margin-right: 10px;
     border: 1px solid #ddd;
     border-radius: 4px;
     min-width: 200px;
+    margin-bottom: 10px; /* Added for better spacing */
 }
+
 
 button {
     padding: 10px 15px;
@@ -55,6 +58,8 @@ button {
     border-radius: 4px;
     cursor: pointer;
     transition: background-color 0.3s ease;
+    margin-right: 5px; /* Added for spacing between buttons */
+    margin-bottom: 5px; /* Added for spacing between buttons */
 }
 
 button:hover {
@@ -77,9 +82,9 @@ button:disabled {
     font-weight: bold;
 }
 
-.log-output {
-    background-color: #222; /* Dark background for log */
-    color: #eee; /* Light text for log */
+.log-output, .json-output { /* Combined styling for log and JSON output */
+    background-color: #222; /* Dark background */
+    color: #eee; /* Light text */
     padding: 15px;
     border-radius: 4px;
     height: 200px;
@@ -88,6 +93,7 @@ button:disabled {
     font-size: 0.9em;
     white-space: pre-wrap; /* Allow wrapping of long lines */
     word-break: break-all;
+    margin-top: 10px;
 }
 
 .log-output p {
@@ -100,6 +106,24 @@ button:disabled {
 }
 
 .log-sent { color: #87cefa; } /* Light blue for sent */
-.log-received { color: #90ee90; } /* Light green for received */
-.log-system { color: #ffa07a; } /* Light salmon for system/error */
+.log-received-generic { color: #98fb98; } /* PaleGreen for generic received */
+.log-received-global { color: #add8e6; } /* LightBlue for global events */
+.log-received-game { color: #90ee90; } /* LightGreen for game-specific events */
+.log-system { color: #ffa07a; } /* Light salmon for system */
 .log-error { color: #ff6347; font-weight: bold; } /* Tomato for errors */
+.log-twitch-chat { color: #da70d6; } /* Orchid for Twitch chat */
+
+/* Styling for game-specific controls area */
+#gameSpecificControls button {
+    background-color: #28a745; /* Green for game actions */
+    display: block; /* Make buttons take full width in their container */
+    width: calc(100% - 10px); /* Adjust width considering padding/margin */
+    margin-bottom: 8px;
+}
+#gameSpecificControls button:hover {
+    background-color: #218838;
+}
+#gameSpecificControls p { /* For placeholder text */
+    font-style: italic;
+    color: #6c757d;
+}

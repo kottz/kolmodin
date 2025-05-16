@@ -33,6 +33,7 @@ use game_logic::{
     GameLogic,
     GameTwoEcho,
     HelloWorldGame,
+    DealNoDealGame,
     ServerToClientMessage, // Add this
 };
 use twitch_chat_manager::TwitchChatManagerActorHandle;
@@ -112,7 +113,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                     // Changed to trace for less noise on raw data
                     "Lobby {} (Game: {}): Raw event from client {}: {}",
                     self.lobby_id,
-                    self.game_engine.game_type(),
+                    self.game_engine.game_type_id(),
                     client_id,
                     event_data
                 );
@@ -124,7 +125,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                             // Log the parsed message
                             "Lobby {} (Game: {}): Delegating parsed event {:?} from client {}",
                             self.lobby_id,
-                            self.game_engine.game_type(),
+                            self.game_engine.game_type_id(),
                             parsed_message,
                             client_id
                         );
@@ -136,19 +137,19 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                         tracing::warn!(
                             "Lobby {} (Game: {}): Failed to deserialize event from client {}: '{}'. Raw data: '{}'",
                             self.lobby_id,
-                            self.game_engine.game_type(),
+                            self.game_engine.game_type_id(),
                             client_id,
                             e,
                             event_data
                         );
                         // Send an error message back to the specific client
                         if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
-                            let error_response = ServerToClientMessage::Error {
+                            let error_response = ServerToClientMessage::SystemError {
                                 message: format!("Invalid message format: {}. Please send JSON like: {{\"command\":\"Echo\",\"payload\":{{\"message\":\"your_text\"}}}}", e),
                             };
                             if let Ok(ws_msg) = error_response.to_ws_text() {
                                 if client_tx.send(ws_msg).await.is_err() {
-                                    tracing::warn!("Lobby {} (Game: {}): Failed to send error response to client {}", self.lobby_id, self.game_engine.game_type(), client_id);
+                                    tracing::warn!("Lobby {} (Game: {}): Failed to send error response to client {}", self.lobby_id, self.game_engine.game_type_id(), client_id);
                                 }
                             }
                         }
@@ -162,7 +163,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 tracing::debug!(
                     "Lobby {} (Game: {}): Delegating client {} connect.",
                     self.lobby_id,
-                    self.game_engine.game_type(),
+                    self.game_engine.game_type_id(),
                     client_id
                 );
                 self.game_engine
@@ -173,7 +174,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 tracing::debug!(
                     "Lobby {} (Game: {}): Delegating client {} disconnect.",
                     self.lobby_id,
-                    self.game_engine.game_type(),
+                    self.game_engine.game_type_id(),
                     client_id
                 );
                 self.game_engine.client_disconnected(client_id).await;
@@ -181,7 +182,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             LobbyActorMessage::InternalTwitchMessage(twitch_msg) => {
                 tracing::trace!(
                     "Lobby {} (Game: {}): Received internal Twitch message for channel #{}: <{}> {}",
-                    self.lobby_id, self.game_engine.game_type(),
+                    self.lobby_id, self.game_engine.game_type_id(),
                     twitch_msg.channel, twitch_msg.sender_username, twitch_msg.text
                 );
                 self.game_engine.handle_twitch_message(twitch_msg).await;
@@ -190,7 +191,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 tracing::info!(
                     "Lobby {} (Game: {}): Twitch channel '{}' status update: {:?}",
                     self.lobby_id,
-                    self.game_engine.game_type(),
+                    self.game_engine.game_type_id(),
                     self.twitch_channel_name.as_deref().unwrap_or("N/A"),
                     status
                 );
@@ -206,7 +207,7 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
     tracing::info!(
         "Lobby Actor {} (Game: {}) started. Twitch Channel: {:?}",
         actor.lobby_id,
-        actor.game_engine.game_type(),
+        actor.game_engine.game_type_id(),
         actor.twitch_channel_name
     );
 
@@ -314,7 +315,7 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                     }
                     None => {
                         tracing::info!("Lobby Actor {} (Game: {}): Channel closed. Shutting down.",
-                            actor.lobby_id, actor.game_engine.game_type());
+                            actor.lobby_id, actor.game_engine.game_type_id());
                         break;
                     }
                 }
@@ -322,7 +323,7 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
             _ = tokio::time::sleep_until(last_activity + inactivity_timeout_duration), if actor.game_engine.is_empty() => {
                 // This branch only runs if the sleep_until fires AND game_engine.is_empty() is true
                 tracing::info!("Lobby {} Actor (Game: {}): Inactivity timeout and game empty. Notifying manager.",
-                    actor.lobby_id, actor.game_engine.game_type());
+                    actor.lobby_id, actor.game_engine.game_type_id());
                 if let Err(e) = actor.manager_handle.notify_lobby_shutdown(actor.lobby_id).await {
                     tracing::error!("Lobby {} Actor: Failed to notify LobbyManager of shutdown: {}", actor.lobby_id, e);
                 }
@@ -331,7 +332,7 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
             _ = tokio::time::sleep_until(last_activity + inactivity_timeout_duration), if !actor.game_engine.is_empty() => {
                 // This branch only runs if the sleep_until fires AND game_engine.is_empty() is false
                 tracing::debug!("Lobby {} Actor (Game: {}): Inactivity timeout, but game not empty. Resetting timer.",
-                    actor.lobby_id, actor.game_engine.game_type());
+                    actor.lobby_id, actor.game_engine.game_type_id());
                 last_activity = Instant::now(); // Reset timer and continue
             }
         }
@@ -340,7 +341,7 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
     tracing::info!(
         "Lobby Actor {} (Game: {}) stopping.",
         actor.lobby_id,
-        actor.game_engine.game_type()
+        actor.game_engine.game_type_id()
     );
 
     if let Some(ref channel_name) = actor.twitch_channel_name {
@@ -508,7 +509,7 @@ impl LobbyManagerActor {
                     match game_type_str_req.to_lowercase().as_str() {
                         "game2" | "gametwoecho" => {
                             let game_engine = GameTwoEcho::new();
-                            actual_game_type_created = game_engine.game_type();
+                            actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle = LobbyActorHandle::new_spawned::<GameTwoEcho>(
                                 lobby_id,
                                 32,
@@ -520,8 +521,20 @@ impl LobbyManagerActor {
                         }
                         "helloworld" | "default" | "" => {
                             let game_engine = HelloWorldGame::new();
-                            actual_game_type_created = game_engine.game_type();
+                            actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
+                                lobby_id,
+                                32,
+                                manager_handle_clone,
+                                game_engine,
+                                requested_twitch_channel.clone(),
+                                self.twitch_chat_manager_handle.clone(),
+                            );
+                        }
+                        "dealnodeal" | "dealornodeal" => {
+                            let game_engine = DealNoDealGame::new();
+                            actual_game_type_created = game_engine.game_type_id();
+                            lobby_actor_handle = LobbyActorHandle::new_spawned::<DealNoDealGame>(
                                 lobby_id,
                                 32,
                                 manager_handle_clone,
@@ -533,7 +546,7 @@ impl LobbyManagerActor {
                         unknown => {
                             tracing::warn!("LobbyManager: Unknown game type '{}'. Defaulting to HelloWorldGame.", unknown);
                             let game_engine = HelloWorldGame::new();
-                            actual_game_type_created = game_engine.game_type();
+                            actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
                                 lobby_id,
                                 32,
