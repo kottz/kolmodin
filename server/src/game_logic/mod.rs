@@ -12,13 +12,13 @@ pub mod messages;
 pub use messages::{ClientToServerMessage, ServerToClientMessage}; // These are now generic
 
 // Game mode modules
-pub mod deal_or_no_deal;
+pub mod deal_no_deal;
 mod game_two_echo; // Example
 mod hello_world_game; // Example // Your DND game
 
+pub use deal_no_deal::DealNoDealGame;
 pub use game_two_echo::GameTwoEcho;
 pub use hello_world_game::HelloWorldGame;
-pub use deal_or_no_deal::DealNoDealGame;
 
 pub trait GameLogic: Send + Sync + Debug {
     fn client_connected(
