@@ -1,7 +1,7 @@
 // src/game_logic/game_two_echo.rs
 
-use super::GameLogic;
-use crate::twitch_integration::ParsedTwitchMessage; // Import the message type
+use super::{ClientToServerMessage, GameLogic, ServerToClientMessage}; // Updated imports
+use crate::twitch_integration::ParsedTwitchMessage;
 use axum::extract::ws;
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
@@ -18,6 +18,43 @@ impl GameTwoEcho {
             clients: HashMap::new(),
         }
     }
+
+    async fn send_to_client(&self, client_id: &Uuid, message: ServerToClientMessage) {
+        if let Some(tx) = self.clients.get(client_id) {
+            match message.to_ws_text() {
+                Ok(ws_msg) => {
+                    if tx.send(ws_msg).await.is_err() {
+                        tracing::warn!(
+                            "GameTwoEcho: Failed to send message to client {}",
+                            client_id
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "GameTwoEcho: Failed to serialize message for client {}: {}",
+                        client_id,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    async fn broadcast_to_all(&self, message: ServerToClientMessage) {
+        match message.to_ws_text() {
+            Ok(ws_msg) => {
+                for (id, tx) in &self.clients {
+                    if tx.send(ws_msg.clone()).await.is_err() {
+                        tracing::warn!("GameTwoEcho: Failed to broadcast to client {}", id);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("GameTwoEcho: Failed to serialize broadcast message: {}", e);
+            }
+        }
+    }
 }
 
 impl GameLogic for GameTwoEcho {
@@ -31,65 +68,37 @@ impl GameLogic for GameTwoEcho {
         self.clients.remove(&client_id);
     }
 
-    async fn handle_event(&mut self, client_id: Uuid, event_data: String) {
-        // ... (existing handle_event logic) ...
+    // UPDATED handle_event
+    async fn handle_event(&mut self, client_id: Uuid, message: ClientToServerMessage) {
         tracing::debug!(
-            "GameTwoEcho: Handling event from {}: {}",
+            "GameTwoEcho: Handling event from {}: {:?}",
             client_id,
-            event_data
+            message
         );
 
-        let mut parts = event_data.splitn(2, ' ');
-        let command = parts.next().unwrap_or("").to_lowercase();
-        let payload = parts.next().unwrap_or("Game 2 says Hello (default)");
-
-        let message_to_send = format!("Game 2: {}", payload);
-
-        match command.as_str() {
-            "send_to_self" => {
-                if let Some(sender_tx) = self.clients.get(&client_id) {
-                    if sender_tx
-                        .send(ws::Message::Text(
-                            format!("Private: {}", message_to_send).into(),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("GameTwoEcho: Failed to send to self {}", client_id);
-                    }
-                }
+        match message {
+            ClientToServerMessage::Echo { message: payload } => {
+                let response = ServerToClientMessage::EchoResponse {
+                    original: payload.clone(),
+                    processed: format!("Game 2 Echo of your original: {}", payload),
+                };
+                self.send_to_client(&client_id, response).await;
             }
-            "broadcast_all" => {
-                for (target_id, tx) in &self.clients {
-                    if tx
-                        .send(ws::Message::Text(
-                            format!("Broadcast: {}", message_to_send).into(),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("GameTwoEcho: Failed to broadcast to {}", target_id);
-                    }
-                }
+            ClientToServerMessage::SendToSelf { message: payload } => {
+                let response = ServerToClientMessage::PrivateMessage {
+                    content: format!("Game 2 Private: {}", payload),
+                };
+                self.send_to_client(&client_id, response).await;
             }
-            // ... other event handlers
-            _ => {
-                if let Some(sender_tx) = self.clients.get(&client_id) {
-                    if sender_tx
-                        .send(ws::Message::Text(
-                            format!("Game 2 Echo of your original: {}", event_data).into(),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("GameTwoEcho: Failed to send echo to {}", client_id);
-                    }
-                }
+            ClientToServerMessage::BroadcastAll { message: payload } => {
+                let response = ServerToClientMessage::BroadcastMessage {
+                    content: format!("Game 2 Broadcast: {}", payload),
+                };
+                self.broadcast_to_all(response).await;
             }
         }
     }
 
-    /// Implement the new method for handling Twitch messages.
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {
         tracing::info!(
             "GameTwoEcho: Received Twitch message in channel #{}: <{}> {}",
@@ -97,23 +106,15 @@ impl GameLogic for GameTwoEcho {
             message.sender_username,
             message.text
         );
-        // For GameTwoEcho, maybe just echo it back to the game clients prefixed
-        let game_broadcast_text = format!(
-            "[G2 Twitch #{} by {}]: {}",
-            message.channel, message.sender_username, message.text
-        );
-        for (client_id, tx) in &self.clients {
-            if tx
-                .send(ws::Message::Text(game_broadcast_text.clone().into()))
-                .await
-                .is_err()
-            {
-                tracing::warn!(
-                    "GameTwoEcho: Failed to broadcast Twitch message to game client {}",
-                    client_id
-                );
-            }
-        }
+        let response = ServerToClientMessage::TwitchMessageRelay {
+            channel: message.channel.clone(),
+            sender: message.sender_username.clone(),
+            text: format!(
+                "[G2 Twitch #{} by {}]: {}",
+                message.channel, message.sender_username, message.text
+            ),
+        };
+        self.broadcast_to_all(response).await;
     }
 
     fn is_empty(&self) -> bool {
@@ -122,5 +123,9 @@ impl GameLogic for GameTwoEcho {
 
     fn game_type(&self) -> String {
         "GameTwoEcho".to_string()
+    }
+
+    fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>> {
+        self.clients.get(&client_id).cloned()
     }
 }

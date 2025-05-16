@@ -1,7 +1,7 @@
 // src/game_logic/hello_world_game.rs
 
-use super::GameLogic;
-use crate::twitch_integration::ParsedTwitchMessage; // Import the message type
+use super::{ClientToServerMessage, GameLogic, ServerToClientMessage}; // Updated imports
+use crate::twitch_integration::ParsedTwitchMessage;
 use axum::extract::ws;
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
@@ -18,6 +18,46 @@ impl HelloWorldGame {
             clients: HashMap::new(),
         }
     }
+
+    async fn send_to_client(&self, client_id: &Uuid, message: ServerToClientMessage) {
+        if let Some(tx) = self.clients.get(client_id) {
+            match message.to_ws_text() {
+                Ok(ws_msg) => {
+                    if tx.send(ws_msg).await.is_err() {
+                        tracing::warn!(
+                            "HelloWorldGame: Failed to send message to client {}",
+                            client_id
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "HelloWorldGame: Failed to serialize message for client {}: {}",
+                        client_id,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    async fn broadcast_to_all(&self, message: ServerToClientMessage) {
+        match message.to_ws_text() {
+            Ok(ws_msg) => {
+                for (id, tx) in &self.clients {
+                    if tx.send(ws_msg.clone()).await.is_err() {
+                        tracing::warn!("HelloWorldGame: Failed to broadcast to client {}", id);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "HelloWorldGame: Failed to serialize broadcast message: {}",
+                    e
+                );
+            }
+        }
+    }
 }
 
 impl GameLogic for HelloWorldGame {
@@ -31,64 +71,37 @@ impl GameLogic for HelloWorldGame {
         self.clients.remove(&client_id);
     }
 
-    async fn handle_event(&mut self, client_id: Uuid, event_data: String) {
+    // UPDATED handle_event
+    async fn handle_event(&mut self, client_id: Uuid, message: ClientToServerMessage) {
         tracing::debug!(
-            "HelloWorldGame: Handling event from {}: {}",
+            "HelloWorldGame: Handling event from {}: {:?}",
             client_id,
-            event_data
+            message
         );
 
-        let mut parts = event_data.splitn(2, ' ');
-        let command = parts.next().unwrap_or("").to_lowercase();
-        let payload = parts.next().unwrap_or("Hello World (default from game)");
-
-        let message_to_send = payload.to_string();
-
-        match command.as_str() {
-            "send_to_self" => {
-                if let Some(sender_tx) = self.clients.get(&client_id) {
-                    if sender_tx
-                        .send(ws::Message::Text(
-                            format!("Game1 Private: {}", message_to_send).into(),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("HelloWorldGame: Failed to send to self {}", client_id);
-                    }
-                }
+        match message {
+            ClientToServerMessage::Echo { message: payload } => {
+                let response = ServerToClientMessage::EchoResponse {
+                    original: payload.clone(),
+                    processed: format!("Game1 Echo: {}", payload),
+                };
+                self.send_to_client(&client_id, response).await;
             }
-            "broadcast_all" => {
-                for (target_id, tx) in &self.clients {
-                    if tx
-                        .send(ws::Message::Text(
-                            format!("Game1 Broadcast: {}", message_to_send).into(),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("HelloWorldGame: Failed to broadcast to {}", target_id);
-                    }
-                }
+            ClientToServerMessage::SendToSelf { message: payload } => {
+                let response = ServerToClientMessage::PrivateMessage {
+                    content: format!("Game1 Private: {}", payload),
+                };
+                self.send_to_client(&client_id, response).await;
             }
-            // ... other event handlers
-            _ => {
-                if let Some(sender_tx) = self.clients.get(&client_id) {
-                    if sender_tx
-                        .send(ws::Message::Text(
-                            format!("Game1 Echo: {}", event_data).into(),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("HelloWorldGame: Failed to send echo to {}", client_id);
-                    }
-                }
+            ClientToServerMessage::BroadcastAll { message: payload } => {
+                let response = ServerToClientMessage::BroadcastMessage {
+                    content: format!("Game1 Broadcast: {}", payload),
+                };
+                self.broadcast_to_all(response).await;
             }
         }
     }
 
-    /// Implement the new method for handling Twitch messages.
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {
         tracing::info!(
             "HelloWorldGame: Received Twitch message in channel #{}: <{}> {}",
@@ -97,24 +110,12 @@ impl GameLogic for HelloWorldGame {
             message.text
         );
 
-        // Example: Broadcast Twitch message to all connected game clients
-        let game_broadcast_text = format!(
-            "[Twitch #{} by {}]: {}",
-            message.channel, message.sender_username, message.text
-        );
-
-        for (client_id, tx) in &self.clients {
-            if tx
-                .send(ws::Message::Text(game_broadcast_text.clone().into()))
-                .await
-                .is_err()
-            {
-                tracing::warn!(
-                    "HelloWorldGame: Failed to broadcast Twitch message to game client {}",
-                    client_id
-                );
-            }
-        }
+        let response = ServerToClientMessage::TwitchMessageRelay {
+            channel: message.channel.clone(),
+            sender: message.sender_username.clone(),
+            text: message.text.clone(),
+        };
+        self.broadcast_to_all(response).await;
     }
 
     fn is_empty(&self) -> bool {
@@ -123,5 +124,9 @@ impl GameLogic for HelloWorldGame {
 
     fn game_type(&self) -> String {
         "HelloWorldGame".to_string()
+    }
+
+    fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>> {
+        self.clients.get(&client_id).cloned()
     }
 }

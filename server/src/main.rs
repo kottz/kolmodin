@@ -27,7 +27,14 @@ mod twitch_chat_manager;
 mod twitch_integration;
 
 // --- Imports from our modules ---
-use game_logic::{GameLogic, GameTwoEcho, HelloWorldGame};
+use game_logic::{
+    messages as game_messages, // For the deserialization helper
+    ClientToServerMessage,     // Add this
+    GameLogic,
+    GameTwoEcho,
+    HelloWorldGame,
+    ServerToClientMessage, // Add this
+};
 use twitch_chat_manager::TwitchChatManagerActorHandle;
 use twitch_integration::{
     ParsedTwitchMessage,
@@ -75,6 +82,7 @@ struct LobbyActor<G: GameLogic + Send + 'static> {
 impl<G: GameLogic + Send + 'static> LobbyActor<G> {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        // ... (same arguments as before) ...
         receiver: mpsc::Receiver<LobbyActorMessage>,
         lobby_id: Uuid,
         game_engine: G,
@@ -98,15 +106,54 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
         match msg {
             LobbyActorMessage::ProcessEvent {
                 client_id,
-                event_data,
+                event_data, // This is still the raw String from WebSocket
             } => {
-                tracing::debug!(
-                    "Lobby {} (Game: {}): Delegating event from client {}",
+                tracing::trace!(
+                    // Changed to trace for less noise on raw data
+                    "Lobby {} (Game: {}): Raw event from client {}: {}",
                     self.lobby_id,
                     self.game_engine.game_type(),
-                    client_id
+                    client_id,
+                    event_data
                 );
-                self.game_engine.handle_event(client_id, event_data).await;
+
+                // Attempt to deserialize the raw string into a structured ClientToServerMessage
+                match game_messages::client_message_from_ws_text(&event_data) {
+                    Ok(parsed_message) => {
+                        tracing::debug!(
+                            // Log the parsed message
+                            "Lobby {} (Game: {}): Delegating parsed event {:?} from client {}",
+                            self.lobby_id,
+                            self.game_engine.game_type(),
+                            parsed_message,
+                            client_id
+                        );
+                        self.game_engine
+                            .handle_event(client_id, parsed_message)
+                            .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Lobby {} (Game: {}): Failed to deserialize event from client {}: '{}'. Raw data: '{}'",
+                            self.lobby_id,
+                            self.game_engine.game_type(),
+                            client_id,
+                            e,
+                            event_data
+                        );
+                        // Send an error message back to the specific client
+                        if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
+                            let error_response = ServerToClientMessage::Error {
+                                message: format!("Invalid message format: {}. Please send JSON like: {{\"command\":\"Echo\",\"payload\":{{\"message\":\"your_text\"}}}}", e),
+                            };
+                            if let Ok(ws_msg) = error_response.to_ws_text() {
+                                if client_tx.send(ws_msg).await.is_err() {
+                                    tracing::warn!("Lobby {} (Game: {}): Failed to send error response to client {}", self.lobby_id, self.game_engine.game_type(), client_id);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             LobbyActorMessage::ClientConnected {
                 client_id,
