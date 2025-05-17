@@ -1,4 +1,4 @@
-// src/game_logic/deal_or_no_deal_game/mod.rs
+// src/game_logic/deal_no_deal.rs
 use axum::extract::ws;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -700,15 +700,13 @@ impl GameLogic for DealNoDealGame {
                                     return;
                                 }
                                 tracing::info!("DNDGame: Voting concluded by admin {}.", client_id);
-                                self.is_voting_active = false;
+                                self.is_voting_active = false; // Set to false for now. May be re-activated if round continues.
 
-                                let context_taken =
-                                    self // Keep the original Option<DNDVoteTypeContext>
-                                        .current_vote_context
-                                        .take() // self.current_vote_context is now None
-                                        .expect("Voting context missing during conclusion");
+                                let context_taken = self
+                                    .current_vote_context
+                                    .take()
+                                    .expect("Voting context missing during conclusion");
 
-                                // Tally votes using the context_taken *before* it was removed from self.current_vote_context
                                 let final_tally = self.tally_current_votes(&context_taken);
 
                                 match context_taken {
@@ -732,7 +730,7 @@ impl GameLogic for DealNoDealGame {
                                                 };
                                             self.current_round_index = 0;
                                             self.broadcast_dnd_event_to_all_admins(DNDGameEvent::VotingPeriodChange {
-                                                is_active: false, vote_context: context_taken,
+                                                is_active: false, vote_context: context_taken.clone(),
                                                 instruction_or_outcome: format!("Voting ended. Twitch selected briefcase #{} as their case!", selected_case_id),
                                                 final_tally: Some(final_tally),
                                             }).await;
@@ -747,7 +745,7 @@ impl GameLogic for DealNoDealGame {
                                                 };
                                         } else {
                                             // No valid votes. Re-open voting.
-                                            self.start_voting_period(context_taken); // Pass the original context back
+                                            self.start_voting_period(context_taken.clone()); // Pass the original context back
                                             self.broadcast_dnd_event_to_all_admins(DNDGameEvent::VotingPeriodChange {
                                                 is_active: true, vote_context: context_taken,
                                                 instruction_or_outcome: "Voting ended but no valid case selected. Voting re-opened. Please vote again!".to_string(),
@@ -755,64 +753,52 @@ impl GameLogic for DealNoDealGame {
                                             }).await;
                                         }
                                     }
-                                    DNDVoteTypeContext::OpenRoundCases { num_expected } => {
-                                        let current_round_num_from_state = match self.internal_state
+                                    DNDVoteTypeContext::OpenRoundCases { num_expected: _ } => { // _num_expected from context might differ if state changed. Rely on state.
+                                        let (
+                                            current_round_num,
+                                            total_to_open_this_round_in_state,
+                                            mut cases_opened_count_in_state_for_round, // Renamed for clarity
+                                        ) = if let DNDInternalState::RoundCaseOpeningVoting {
+                                            round_num,
+                                            num_to_open_in_round,
+                                            cases_chosen_for_opening_count,
+                                        } = self.internal_state
                                         {
-                                            DNDInternalState::RoundCaseOpeningVoting {
-                                                round_num,
-                                                ..
-                                            } => round_num,
-                                            // If somehow not in RoundCaseOpeningVoting, try to infer, or fallback/error
-                                            DNDInternalState::CasesOpenedMovingToOffer {
-                                                round_num,
-                                            } => round_num,
-                                            DNDInternalState::BankerOfferPresented {
-                                                round_num,
-                                                ..
-                                            } => round_num,
-                                            DNDInternalState::DealNoDealVoting {
-                                                round_num,
-                                                ..
-                                            } => round_num,
-                                            _ => {
-                                                tracing::error!("DNDGame: ConcludeVoting for OpenRoundCases called in unexpected state: {:?}, using current_round_index", self.internal_state);
-                                                // Fallback to current_round_index if possible, +1 because round_index is 0-based
-                                                (self.current_round_index + 1) as u8
-                                            }
+                                            (round_num, num_to_open_in_round, cases_chosen_for_opening_count)
+                                        } else {
+                                            tracing::error!(
+                                                "DNDGame: ConcludeVoting for OpenRoundCases called in unexpected state: {:?}. Aborting and attempting to restore vote context.",
+                                                self.internal_state
+                                            );
+                                            self.current_vote_context = Some(context_taken); // Try to restore
+                                            self.is_voting_active = true; // Revert
+                                            // No further state change, just broadcast what we have.
+                                            self.broadcast_current_full_game_state().await;
+                                            return; // Critical error, stop processing this command.
+                                        };
+                                        
+                                        let num_still_needed_for_round_this_step = total_to_open_this_round_in_state
+                                            .saturating_sub(cases_opened_count_in_state_for_round);
+
+                                        let cases_to_open_ids_this_step = if num_still_needed_for_round_this_step > 0 {
+                                            self.process_round_case_opening_votes_from_tally(
+                                                &final_tally,
+                                                num_still_needed_for_round_this_step,
+                                            )
+                                        } else {
+                                            Vec::new() // No more cases were needed or state is inconsistent
                                         };
 
-                                        let cases_to_open_ids = self
-                                            .process_round_case_opening_votes_from_tally(
-                                                &final_tally,
-                                                num_expected,
-                                            );
+                                        let mut successfully_opened_this_step_count = 0;
+                                        let mut opened_cases_desc_parts = Vec::new();
 
-                                        let mut outcome_desc = format!(
-                                            "Voting ended for Round {}. Cases opened: ",
-                                            current_round_num_from_state
-                                        );
-
-                                        if cases_to_open_ids.is_empty() && num_expected > 0 {
-                                            outcome_desc = format!("Voting ended for Round {}. No valid cases selected to open. Voting re-opened.", current_round_num_from_state);
-                                            self.start_voting_period(context_taken); // Re-open voting with the original context
-                                            self.broadcast_dnd_event_to_all_admins(
-                                                DNDGameEvent::VotingPeriodChange {
-                                                    is_active: true,
-                                                    vote_context: context_taken,
-                                                    instruction_or_outcome: outcome_desc.clone(),
-                                                    final_tally: Some(final_tally),
-                                                },
-                                            )
-                                            .await;
-                                        } else {
-                                            for (i, case_id) in cases_to_open_ids.iter().enumerate()
-                                            {
-                                                if let Some(value_opened) =
-                                                    self.open_briefcase(*case_id)
-                                                {
+                                        if !cases_to_open_ids_this_step.is_empty() {
+                                            for case_id in &cases_to_open_ids_this_step {
+                                                if let Some(value_opened) = self.open_briefcase(*case_id) {
+                                                    successfully_opened_this_step_count += 1;
                                                     tracing::info!(
                                                         "DNDGame: Case {} opened with value ${}",
-                                                        case_id,
+                                                        *case_id,
                                                         value_opened
                                                     );
                                                     self.broadcast_dnd_event_to_all_admins(
@@ -823,90 +809,89 @@ impl GameLogic for DealNoDealGame {
                                                         },
                                                     )
                                                     .await;
-                                                    if i > 0 {
-                                                        outcome_desc.push_str(", ");
-                                                    }
-                                                    outcome_desc.push_str(&format!(
-                                                        "#{} (${})",
-                                                        case_id, value_opened
-                                                    ));
+                                                    opened_cases_desc_parts.push(format!("#{} (${})", *case_id, value_opened));
                                                 }
                                             }
-                                            if cases_to_open_ids.is_empty() && num_expected == 0 {
-                                                // No cases were expected
-                                                outcome_desc.push_str("None (as expected).");
-                                            } else if cases_to_open_ids.is_empty()
-                                                && num_expected > 0
-                                            {
-                                                // Expected cases but none chosen
-                                                outcome_desc.push_str("None (no valid votes or all available were opened).");
-                                            }
+                                        }
+                                        
+                                        let outcome_message_this_step = if successfully_opened_this_step_count > 0 {
+                                            format!("Voting concluded. Round {}. Cases opened this step: {}.", current_round_num, opened_cases_desc_parts.join(", "))
+                                        } else if num_still_needed_for_round_this_step > 0 { // Was expecting cases but none selected/valid
+                                            format!("Voting concluded. Round {}. No new valid cases selected to open this step.", current_round_num)
+                                        } else { // num_still_needed_for_round_this_step was 0
+                                            format!("Voting concluded. Round {}. All required cases for this round were already open, or no more were expected.", current_round_num)
+                                        };
 
-                                            self.broadcast_dnd_event_to_all_admins(
-                                                DNDGameEvent::VotingPeriodChange {
-                                                    is_active: false,
-                                                    vote_context: context_taken,
-                                                    instruction_or_outcome: outcome_desc,
-                                                    final_tally: Some(final_tally),
-                                                },
-                                            )
-                                            .await;
+                                        // Update the count in the state *immediately*
+                                        let updated_total_opened_for_round = if let DNDInternalState::RoundCaseOpeningVoting {
+                                            ref mut cases_chosen_for_opening_count, ..
+                                        } = self.internal_state {
+                                            *cases_chosen_for_opening_count += successfully_opened_this_step_count;
+                                            *cases_chosen_for_opening_count // Return the updated value
+                                        } else {
+                                            tracing::error!("DNDGame: State changed unexpectedly from RoundCaseOpeningVoting while processing. Current state: {:?}", self.internal_state);
+                                            // Attempt to use the last known good value, though this is problematic
+                                            cases_opened_count_in_state_for_round + successfully_opened_this_step_count
+                                        };
 
+
+                                        // Broadcast that this voting step is done.
+                                        self.broadcast_dnd_event_to_all_admins(
+                                            DNDGameEvent::VotingPeriodChange {
+                                                is_active: false, // For this specific sub-step of voting
+                                                vote_context: context_taken.clone(), // Show context for this past vote
+                                                instruction_or_outcome: outcome_message_this_step.clone(),
+                                                final_tally: Some(final_tally.clone()),
+                                            },
+                                        ).await;
+
+                                        // Now, check if the round is complete.
+                                        if updated_total_opened_for_round >= total_to_open_this_round_in_state {
+                                            // Round is complete. Proceed to Banker Offer or Game End.
+                                            tracing::info!("DNDGame: Round {} complete. {}/{} cases opened.", current_round_num, updated_total_opened_for_round, total_to_open_this_round_in_state);
+                                            
                                             let unopened_not_player_case_count = self
                                                 .briefcases
                                                 .iter()
-                                                .filter(|b| {
-                                                    !b.is_opened
-                                                        && Some(b.id) != self.player_chosen_case_id
-                                                })
+                                                .filter(|b| !b.is_opened && Some(b.id) != self.player_chosen_case_id)
                                                 .count();
 
-                                            if unopened_not_player_case_count == 0
-                                                && self.player_chosen_case_id.is_some()
-                                            {
-                                                let player_case = self
-                                                    .briefcases
-                                                    .iter()
-                                                    .find(|b| {
-                                                        Some(b.id) == self.player_chosen_case_id
-                                                    })
-                                                    .expect(
-                                                        "Player case ID set but case not found",
-                                                    );
-                                                self.internal_state =
-                                                    DNDInternalState::GameEndedNoDeal {
-                                                        winnings: player_case.value,
-                                                    };
-                                                self.broadcast_dnd_event_to_all_admins(
-                                                    DNDGameEvent::CaseOpened {
-                                                        case_id: player_case.id,
-                                                        value: player_case.value,
-                                                        is_player_case_reveal_at_end: true,
-                                                    },
-                                                )
-                                                .await;
+                                            if unopened_not_player_case_count == 0 && self.player_chosen_case_id.is_some() {
+                                                let player_case = self.briefcases.iter().find(|b| Some(b.id) == self.player_chosen_case_id).expect("Player case ID set but case not found");
+                                                self.internal_state = DNDInternalState::GameEndedNoDeal { winnings: player_case.value };
+                                                self.broadcast_dnd_event_to_all_admins(DNDGameEvent::CaseOpened { case_id: player_case.id, value: player_case.value, is_player_case_reveal_at_end: true }).await;
                                                 self.broadcast_dnd_event_to_all_admins(DNDGameEvent::GameEnded {
                                                     summary: format!("No Deal! Game ended. Player case #{} had ${}", player_case.id, player_case.value),
                                                     winnings: player_case.value, player_case_original_value: player_case.value,
                                                 }).await;
                                             } else {
-                                                self.internal_state =
-                                                    DNDInternalState::CasesOpenedMovingToOffer {
-                                                        round_num: current_round_num_from_state,
-                                                    };
+                                                self.internal_state = DNDInternalState::CasesOpenedMovingToOffer { round_num: current_round_num };
                                                 let offer = self.calculate_banker_offer();
-                                                self.broadcast_dnd_event_to_all_admins(
-                                                    DNDGameEvent::BankerOffer {
-                                                        offer_amount: offer,
-                                                    },
-                                                )
-                                                .await;
-                                                self.internal_state =
-                                                    DNDInternalState::BankerOfferPresented {
-                                                        round_num: current_round_num_from_state,
-                                                        offer,
-                                                    };
+                                                self.broadcast_dnd_event_to_all_admins(DNDGameEvent::BankerOffer { offer_amount: offer }).await;
+                                                self.internal_state = DNDInternalState::BankerOfferPresented { round_num: current_round_num, offer };
                                             }
+                                        } else {
+                                            // Round NOT complete. Re-open voting for remaining cases.
+                                            // The self.internal_state is still RoundCaseOpeningVoting with updated counts.
+                                            let remaining_to_select_for_round = total_to_open_this_round_in_state.saturating_sub(updated_total_opened_for_round);
+                                            tracing::info!("DNDGame: Round {} continues. {}/{} cases opened. Need {} more.", current_round_num, updated_total_opened_for_round, total_to_open_this_round_in_state, remaining_to_select_for_round);
+                                            
+                                            let instruction_for_continued_voting = format!(
+                                                "{}. Still need to select {} more case(s) for Round {}. Voting re-opened! Type numbers in chat.",
+                                                outcome_message_this_step, remaining_to_select_for_round, current_round_num
+                                            );
+
+                                            // Re-use the original context_taken (which was OpenRoundCases with total num_expected for the round)
+                                            // start_voting_period will set is_voting_active=true, clear votes, set current_vote_context
+                                            self.start_voting_period(context_taken.clone()); 
+
+                                            self.broadcast_dnd_event_to_all_admins(DNDGameEvent::VotingPeriodChange {
+                                                is_active: true, // Voting is active again
+                                                vote_context: self.current_vote_context.unwrap(), // Use the fresh context from start_voting_period
+                                                instruction_or_outcome: instruction_for_continued_voting,
+                                                final_tally: None, // New voting period
+                                            }).await;
+                                            // The broadcast_current_full_game_state() at the end of handle_event will reflect this.
                                         }
                                     }
                                     DNDVoteTypeContext::DealOrNoDeal => {
@@ -918,6 +903,7 @@ impl GameLogic for DealNoDealGame {
                                                 } => (round_num, offer),
                                                 _ => {
                                                     tracing::error!("DNDGame: ConcludeVoting for DealNoDeal called in unexpected state: {:?}", self.internal_state);
+                                                    // No further state change, just broadcast what we have.
                                                     self.broadcast_current_full_game_state().await;
                                                     return;
                                                 }
@@ -925,7 +911,7 @@ impl GameLogic for DealNoDealGame {
 
                                         let player_took_deal = self
                                             .process_deal_no_deal_votes_from_tally(&final_tally)
-                                            .unwrap_or(false);
+                                            .unwrap_or(false); // Default to No Deal if votes are ambiguous or absent
 
                                         let player_case_id_unwrapped = self
                                             .player_chosen_case_id
@@ -939,9 +925,10 @@ impl GameLogic for DealNoDealGame {
                                         self.broadcast_dnd_event_to_all_admins(
                                             DNDGameEvent::VotingPeriodChange {
                                                 is_active: false,
-                                                vote_context: context_taken,
+                                                vote_context: context_taken.clone(),
                                                 instruction_or_outcome: format!(
-                                                    "Voting ended. Twitch chose: {}!",
+                                                    "Voting ended for Round {}. Twitch chose: {}!",
+                                                    current_round_num_from_state,
                                                     if player_took_deal {
                                                         "DEAL"
                                                     } else {
@@ -1011,7 +998,8 @@ impl GameLogic for DealNoDealGame {
                                                                 actual_num_to_open,
                                                         };
                                                 } else {
-                                                    // Should only happen if unopened_not_player_case_count was 0, covered above
+                                                    // This should ideally be caught by the check above (unopened_not_player_case_count == 0)
+                                                    // but as a fallback, end the game.
                                                     self.internal_state =
                                                         DNDInternalState::GameEndedNoDeal {
                                                             winnings: player_case_value,
@@ -1025,7 +1013,7 @@ impl GameLogic for DealNoDealGame {
                                                     )
                                                     .await;
                                                     self.broadcast_dnd_event_to_all_admins(DNDGameEvent::GameEnded {
-                                                       summary: format!("NO DEAL! (No more cases to open) Player case #{} had ${}", player_case_id_unwrapped, player_case_value),
+                                                       summary: format!("NO DEAL! (No more cases to open or schedule exhausted). Player case #{} had ${}", player_case_id_unwrapped, player_case_value),
                                                        winnings: player_case_value, player_case_original_value: player_case_value,
                                                    }).await;
                                                 }
@@ -1035,6 +1023,7 @@ impl GameLogic for DealNoDealGame {
                                 }
                             }
                         }
+                        // This broadcast ensures the clients always get the latest full state after any command.
                         self.broadcast_current_full_game_state().await;
                     }
                     Err(e) => {
@@ -1047,6 +1036,8 @@ impl GameLogic for DealNoDealGame {
                         };
                         self.send_generic_message_to_client(&client_id, err_msg)
                             .await;
+                        // Even on error, broadcast current state so admin UI might reflect something useful.
+                        self.broadcast_current_full_game_state().await;
                     }
                 }
             }
@@ -1055,6 +1046,9 @@ impl GameLogic for DealNoDealGame {
                     "DNDGame: Received GlobalCommand (unhandled by DND): name {}, data {:?}, from client {}",
                     command_name, data, client_id
                 );
+                // Optionally send a generic ack or info message, or just ignore.
+                // For now, just broadcast state if any admin interaction happened.
+                self.broadcast_current_full_game_state().await;
             }
         }
     }
@@ -1066,7 +1060,16 @@ impl GameLogic for DealNoDealGame {
 
         let vote_text = message.text.trim();
         let voter_id = message.sender_username;
-        let context = self.current_vote_context.unwrap();
+        // Clone the context because self.current_vote_context might be taken by an admin command concurrently.
+        // However, it's generally safer if admin commands that conclude voting set is_voting_active=false first.
+        let context = match self.current_vote_context {
+            Some(ctx) => ctx,
+            None => { // Should be rare if is_voting_active is true
+                tracing::warn!("DNDGame: Twitch message received while is_voting_active=true but current_vote_context is None.");
+                return;
+            }
+        };
+
 
         let mut parsed_vote_value: Option<String> = None;
         let mut is_valid_vote_for_context = false;
@@ -1078,8 +1081,8 @@ impl GameLogic for DealNoDealGame {
                         let case_is_choosable = self.briefcases.iter().any(|b| {
                             b.id == case_id_vote
                                 && !b.is_opened
-                                && (context == DNDVoteTypeContext::SelectPlayerCase
-                                    || Some(b.id) != self.player_chosen_case_id)
+                                && (context == DNDVoteTypeContext::SelectPlayerCase // For player case, any unopened is fine
+                                    || Some(b.id) != self.player_chosen_case_id) // For opening round cases, can't be player's case
                         });
 
                         if case_is_choosable {
@@ -1094,7 +1097,7 @@ impl GameLogic for DealNoDealGame {
                 if lower_vote == "deal" || lower_vote == "yes" {
                     is_valid_vote_for_context = true;
                     parsed_vote_value = Some("DEAL".to_string());
-                } else if lower_vote == "no" || lower_vote == "nodeal" {
+                } else if lower_vote == "no" || lower_vote == "nodeal" || lower_vote == "no deal" { // Added "no deal"
                     is_valid_vote_for_context = true;
                     parsed_vote_value = Some("NO DEAL".to_string());
                 }
@@ -1115,6 +1118,7 @@ impl GameLogic for DealNoDealGame {
         };
         self.broadcast_dnd_event_to_all_admins(dnd_event).await;
 
+        // Only broadcast full game state if a valid vote changed the tally
         if is_valid_vote_for_context {
             self.broadcast_current_full_game_state().await;
         }
