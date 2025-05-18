@@ -187,61 +187,94 @@ impl TwitchChatManagerActor {
                     normalized_channel_name, lobby_id
                 );
 
-                let channel_actor_handle = if let Some(existing_handle) =
-                    self.active_channels.get(&normalized_channel_name)
-                {
-                    tracing::debug!(
-                        "[TWITCH_MANAGER] Found existing TwitchChannelActor for '{}'. Reusing.",
-                        normalized_channel_name
-                    );
-                    existing_handle.clone()
-                } else {
+                let mut create_new_actor = true;
+                let mut obtained_actor_handle: Option<TwitchChannelActorHandle> = None;
+
+                if let Some(existing_handle) = self.active_channels.get(&normalized_channel_name) {
+                    // Check the status of the existing actor.
+                    // .borrow() gets a reference to the current value in the watch channel.
+                    let current_status = existing_handle.get_status_receiver().borrow().clone();
+
+                    if matches!(current_status, TwitchChannelConnectionStatus::Terminated) {
+                        tracing::info!(
+                            "[TWITCH_MANAGER] Existing TwitchChannelActor for '{}' is Terminated. Removing stale handle and will create a new one.",
+                            normalized_channel_name
+                        );
+                        // The actor is terminated, so its handle is stale. Remove it.
+                        self.active_channels.remove(&normalized_channel_name);
+                        // create_new_actor remains true, so a new actor will be made.
+                    } else {
+                        tracing::debug!(
+                            "[TWITCH_MANAGER] Found existing and non-Terminated TwitchChannelActor for '{}' (Status: {:?}). Reusing.",
+                            normalized_channel_name, current_status
+                        );
+                        obtained_actor_handle = Some(existing_handle.clone());
+                        create_new_actor = false;
+                    }
+                }
+                // If no existing handle was found, create_new_actor is still true.
+
+                if create_new_actor {
                     tracing::info!(
-                        "[TWITCH_MANAGER] No existing TwitchChannelActor for '{}'. Creating new one.",
+                        "[TWITCH_MANAGER] Creating new TwitchChannelActor for '{}'.",
                         normalized_channel_name
                     );
-                    // Pass the manager's *own* handle (self_handle_for_children) to the new ChannelActor
                     let new_handle = TwitchChannelActorHandle::new(
                         normalized_channel_name.clone(),
                         Arc::clone(&self.app_oauth_token),
-                        self.self_handle_for_children.clone(), // This is the key part
+                        self.self_handle_for_children.clone(), // Manager's handle for the child
                         self.channel_actor_buffer_size,
                     );
+                    // Store the new handle. If a previous stale handle was removed, this replaces it.
+                    // If there was no handle, this inserts it.
                     self.active_channels
                         .insert(normalized_channel_name.clone(), new_handle.clone());
-                    new_handle
-                };
+                    obtained_actor_handle = Some(new_handle);
+                }
 
-                // Now subscribe the lobby to this channel actor
-                match channel_actor_handle
-                    .add_subscriber(lobby_id, twitch_message_tx_for_lobby)
-                    .await
-                {
-                    Ok(_) => {
-                        tracing::info!(
-                            "[TWITCH_MANAGER] Successfully subscribed lobby '{}' to channel '{}'",
-                            lobby_id,
-                            normalized_channel_name
-                        );
-                        // Respond with the status receiver from the channel actor
-                        let _ = respond_to.send(Ok(channel_actor_handle.get_status_receiver()));
+                // At this point, obtained_actor_handle should always be Some.
+                // If it's not, it's a logic error in the above block.
+                if let Some(final_actor_handle) = obtained_actor_handle {
+                    // Now subscribe the lobby to this channel actor (either new or reused)
+                    match final_actor_handle
+                        .add_subscriber(lobby_id, twitch_message_tx_for_lobby)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!(
+                                "[TWITCH_MANAGER] Successfully subscribed lobby '{}' to channel '{}'",
+                                lobby_id,
+                                normalized_channel_name
+                            );
+                            // Respond with the status receiver from the channel actor
+                            let _ = respond_to.send(Ok(final_actor_handle.get_status_receiver()));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "[TWITCH_MANAGER] Failed to subscribe lobby '{}' to channel '{}': {:?}",
+                                lobby_id,
+                                normalized_channel_name,
+                                e
+                            );
+                            // If adding subscriber fails, and this was a newly created channel_actor,
+                            // the TwitchChannelActor itself should manage its lifecycle if it ends up
+                            // with no subscribers or if its internal startup fails.
+                            // The manager's primary role here is to report the error for this specific subscription.
+                            let _ = respond_to.send(Err(e));
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!(
-                            "[TWITCH_MANAGER] Failed to subscribe lobby '{}' to channel '{}': {:?}",
-                            lobby_id,
-                            normalized_channel_name,
-                            e
-                        );
-                        // If adding subscriber fails, and this was a newly created channel_actor,
-                        // we might want to remove it from active_channels if it has no other subscribers.
-                        // However, add_subscriber itself doesn't tell us if it was the *first* sub.
-                        // The ChannelActor manages its own lifecycle based on subscriber count.
-                        let _ = respond_to.send(Err(e));
-                    }
+                } else {
+                    // This case should ideally not be reached if the logic above is correct.
+                    let error_msg = format!(
+                        "Internal error: Failed to obtain or create actor handle for channel '{}'",
+                        normalized_channel_name
+                    );
+                    tracing::error!("[TWITCH_MANAGER] {}", error_msg);
+                    let _ = respond_to.send(Err(TwitchError::InternalActorError(error_msg)));
                 }
             }
 
+            // ... (other match arms for TwitchChatManagerMessage: UnsubscribeFromChannel, ChannelActorTerminated) ...
             TwitchChatManagerMessage::UnsubscribeFromChannel {
                 channel_name,
                 lobby_id,
@@ -281,6 +314,7 @@ impl TwitchChatManagerActor {
                         lobby_id, normalized_channel_name
                     );
                     let _ = respond_to.send(Err(TwitchError::ChannelActorTerminated(
+                        // Or a more specific "ChannelNotFound" error
                         normalized_channel_name,
                     )));
                 }
@@ -292,21 +326,39 @@ impl TwitchChatManagerActor {
             } => {
                 let normalized_channel_name = channel_name.to_lowercase();
                 tracing::info!(
-                    "[TWITCH_MANAGER] TwitchChannelActor for '{}' (ID: {}) reported termination. Removing from active list.",
+                    "[TWITCH_MANAGER] TwitchChannelActor for '{}' (ID: {}) reported termination. Checking if it should be removed from active list.",
                     normalized_channel_name, actor_id
                 );
-                // We could verify the actor_id if we stored it, but channel_name is usually sufficient.
-                if self
-                    .active_channels
-                    .remove(&normalized_channel_name)
-                    .is_some()
-                {
-                    tracing::debug!(
-                        "[TWITCH_MANAGER] Removed handle for terminated channel '{}'.",
-                        normalized_channel_name
-                    );
+
+                // Only remove if the current handle (if any) matches the actor_id of the one terminating
+                // and/or if its status is indeed Terminated. This prevents accidentally removing a *new* actor
+                // for the same channel if a termination message for an *old* one arrives late.
+                if let Some(active_handle) = self.active_channels.get(&normalized_channel_name) {
+                    // To be absolutely sure, you could store the actor_id in TwitchChannelActorHandle
+                    // or rely on the status. For simplicity here, we'll check status.
+                    // A more robust check would involve comparing actor_id if you store it.
+                    let current_status = active_handle.get_status_receiver().borrow().clone();
+                    if matches!(current_status, TwitchChannelConnectionStatus::Terminated) {
+                        // It's also good practice to check if the actor_id matches if you had access to it here
+                        // from the active_handle. For now, we assume if status is Terminated, it's the one.
+                        if self
+                            .active_channels
+                            .remove(&normalized_channel_name)
+                            .is_some()
+                        {
+                            tracing::debug!(
+                                "[TWITCH_MANAGER] Removed handle for terminated channel '{}'.",
+                                normalized_channel_name
+                            );
+                        } else {
+                            // This case should be rare if the get and remove are close.
+                            tracing::warn!("[TWITCH_MANAGER] Tried to remove terminated channel '{}' but it was already gone.", normalized_channel_name);
+                        }
+                    } else {
+                        tracing::warn!("[TWITCH_MANAGER] Received termination notice for channel '{}' (ID: {}), but current active actor for this channel is not Terminated (Status: {:?}). Ignoring this potentially stale termination notice.", normalized_channel_name, actor_id, current_status);
+                    }
                 } else {
-                    tracing::warn!("[TWITCH_MANAGER] Received termination notice for unknown or already removed channel '{}'.", normalized_channel_name);
+                    tracing::warn!("[TWITCH_MANAGER] Received termination notice for unknown or already removed channel '{}' (ID: {}).", normalized_channel_name, actor_id);
                 }
             }
         }
