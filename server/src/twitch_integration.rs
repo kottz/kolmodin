@@ -184,7 +184,41 @@ impl<'a> IrcMessage<'a> {
             return None;
         }
 
-        let text = self.get_privmsg_text_content()?.to_string();
+        // Original text extraction
+        let initial_text_content = self.get_privmsg_text_content()?.to_string();
+
+        // --- BEGIN TEXT CLEANUP ---
+        // Step 1: Standard trim for leading/trailing common whitespace (ASCII space, tab, newline etc.)
+        let mut cleaned_text_content = initial_text_content.trim().to_string();
+
+        // Step 2: Iteratively remove problematic trailing Unicode characters.
+        // This targets characters like U+200B (Zero Width Space), U+FE0F (Variation Selector),
+        // control characters, format characters, and the specific PUA/Tag range observed (U+E0000-U+E007F).
+        while let Some(last_char) = cleaned_text_content.chars().last() {
+            let char_unicode_val = last_char as u32;
+
+            // Check for various categories of non-content characters
+            if last_char.is_control() ||  // Catches Unicode control characters (Cc, Cf categories)
+               last_char.is_whitespace() || // Catches broader Unicode whitespace (Zs, Zl, Zp categories)
+               (char_unicode_val >= 0xE0000 && char_unicode_val <= 0xE007F) || // Unicode Tag characters (often used as invisible markers)
+               char_unicode_val == 0x200B || // Zero Width Space
+               char_unicode_val == 0xFE0F || // Variation Selector 16 (used with emojis, can be appended)
+               char_unicode_val == 0x200C || // Zero Width Non-Joiner
+               char_unicode_val == 0x200D
+            // Zero Width Joiner
+            // Add other specific Unicode points or small ranges if more are identified
+            {
+                cleaned_text_content.pop(); // Remove the last character
+            } else {
+                // If the last character is not one of the types we want to remove, stop.
+                break;
+            }
+        }
+        // --- END TEXT CLEANUP ---
+
+        // Use the fully cleaned text_content for the ParsedTwitchMessage
+        let text = cleaned_text_content;
+
         let sender_username = self
             .get_display_name()
             .or_else(|| self.get_prefix_username())
@@ -217,7 +251,7 @@ impl<'a> IrcMessage<'a> {
             channel: channel_name_str.to_string(),
             sender_username,
             sender_user_id,
-            text,
+            text, // Use the cleaned text here
             badges: badges_str,
             is_moderator,
             is_subscriber,
