@@ -302,38 +302,43 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
         }));
     }
 
-    let inactivity_timeout_duration = StdDuration::from_secs(300);
-    let mut last_activity = Instant::now();
+    // Timeout for inactivity based on client WebSocket messages
+    let client_ws_inactivity_timeout_duration = StdDuration::from_secs(60 * 60); // 60 minutes
+    let mut last_client_ws_activity = Instant::now(); // Initialize to now
 
     loop {
         tokio::select! {
             maybe_msg = actor.receiver.recv() => {
                 match maybe_msg {
                     Some(msg) => {
-                        last_activity = Instant::now();
+                        // Check if the message is a client WebSocket event, and only then update the timer.
+                        if matches!(msg, LobbyActorMessage::ProcessEvent { .. }) {
+                            last_client_ws_activity = Instant::now();
+                            tracing::debug!(
+                                "Lobby {} Actor (Game: {}): Client WS activity detected. Resetting 60-min inactivity timer.",
+                                actor.lobby_id, actor.game_engine.game_type_id()
+                            );
+                        }
+                        // Process all messages regardless
                         actor.handle_message(msg).await;
                     }
                     None => {
                         tracing::info!("Lobby Actor {} (Game: {}): Channel closed. Shutting down.",
                             actor.lobby_id, actor.game_engine.game_type_id());
-                        break;
+                        break; // Exit actor loop
                     }
                 }
             }
-            _ = tokio::time::sleep_until(last_activity + inactivity_timeout_duration), if actor.game_engine.is_empty() => {
-                // This branch only runs if the sleep_until fires AND game_engine.is_empty() is true
-                tracing::info!("Lobby {} Actor (Game: {}): Inactivity timeout and game empty. Notifying manager.",
-                    actor.lobby_id, actor.game_engine.game_type_id());
+            // This branch fires if no client WebSocket messages have been received for the timeout duration
+            _ = tokio::time::sleep_until(last_client_ws_activity + client_ws_inactivity_timeout_duration) => {
+                tracing::info!(
+                    "Lobby {} Actor (Game: {}): 60-minute inactivity (no client WebSocket messages received). Notifying manager for shutdown.",
+                    actor.lobby_id, actor.game_engine.game_type_id()
+                );
                 if let Err(e) = actor.manager_handle.notify_lobby_shutdown(actor.lobby_id).await {
                     tracing::error!("Lobby {} Actor: Failed to notify LobbyManager of shutdown: {}", actor.lobby_id, e);
                 }
-                break;
-            }
-            _ = tokio::time::sleep_until(last_activity + inactivity_timeout_duration), if !actor.game_engine.is_empty() => {
-                // This branch only runs if the sleep_until fires AND game_engine.is_empty() is false
-                tracing::debug!("Lobby {} Actor (Game: {}): Inactivity timeout, but game not empty. Resetting timer.",
-                    actor.lobby_id, actor.game_engine.game_type_id());
-                last_activity = Instant::now(); // Reset timer and continue
+                break; // Exit the actor loop
             }
         }
     }
