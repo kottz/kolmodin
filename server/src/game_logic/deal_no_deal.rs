@@ -7,11 +7,11 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
+use crate::game_logic::GameLogic;
 use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
 };
-use crate::game_logic::GameLogic;
 use crate::twitch_integration::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_DND: &str = "DealNoDeal";
@@ -475,7 +475,12 @@ impl DealNoDealGame {
                         opened_so_far_for_round, // Use updated local copy
                     };
                     self.current_votes_by_user.clear(); // Clear votes for fresh voting for remaining cases
-                    tracing::warn!("DND: Not enough cases opened for round {}. Target: {}, Opened: {}. Awaiting more votes.", round_number, total_to_open_for_round, opened_so_far_for_round);
+                    tracing::warn!(
+                        "DND: Not enough cases opened for round {}. Target: {}, Opened: {}. Awaiting more votes.",
+                        round_number,
+                        total_to_open_for_round,
+                        opened_so_far_for_round
+                    );
                 }
             }
             GamePhase::DealOrNoDeal_Voting {
@@ -512,7 +517,7 @@ impl DealNoDealGame {
                         .briefcase_is_opened
                         .iter()
                         .zip(0..)
-                        .filter(|(&is_open, idx)| {
+                        .filter(|&(is_open, ref idx)| {
                             !is_open && Some(*idx) != self.player_chosen_case_index
                         })
                         .count();
