@@ -1,14 +1,14 @@
 // src/main.rs
 
 use axum::{
+    Router,
     extract::{
-        ws::{self, WebSocket, WebSocketUpgrade},
         Path, State,
+        ws::{self, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{any, post},
-    Router,
 };
 use config::Config;
 use futures_util::{SinkExt, StreamExt};
@@ -28,13 +28,13 @@ mod twitch_integration;
 
 // --- Imports from our modules ---
 use game_logic::{
-    messages as game_messages, // For the deserialization helper
-    ClientToServerMessage,     // Add this
+    ClientToServerMessage, // Add this
     DealNoDealGame,
     GameLogic,
     GameTwoEcho,
     HelloWorldGame,
-    ServerToClientMessage, // Add this
+    ServerToClientMessage,     // Add this
+    messages as game_messages, // For the deserialization helper
 };
 use twitch_chat_manager::TwitchChatManagerActorHandle;
 use twitch_integration::{
@@ -145,11 +145,19 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                         // Send an error message back to the specific client
                         if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
                             let error_response = ServerToClientMessage::SystemError {
-                                message: format!("Invalid message format: {}. Please send JSON like: {{\"command\":\"Echo\",\"payload\":{{\"message\":\"your_text\"}}}}", e),
+                                message: format!(
+                                    "Invalid message format: {}. Please send JSON like: {{\"command\":\"Echo\",\"payload\":{{\"message\":\"your_text\"}}}}",
+                                    e
+                                ),
                             };
                             if let Ok(ws_msg) = error_response.to_ws_text() {
                                 if client_tx.send(ws_msg).await.is_err() {
-                                    tracing::warn!("Lobby {} (Game: {}): Failed to send error response to client {}", self.lobby_id, self.game_engine.game_type_id(), client_id);
+                                    tracing::warn!(
+                                        "Lobby {} (Game: {}): Failed to send error response to client {}",
+                                        self.lobby_id,
+                                        self.game_engine.game_type_id(),
+                                        client_id
+                                    );
                                 }
                             }
                         }
@@ -182,8 +190,11 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             LobbyActorMessage::InternalTwitchMessage(twitch_msg) => {
                 tracing::trace!(
                     "Lobby {} (Game: {}): Received internal Twitch message for channel #{}: <{}> {}",
-                    self.lobby_id, self.game_engine.game_type_id(),
-                    twitch_msg.channel, twitch_msg.sender_username, twitch_msg.text
+                    self.lobby_id,
+                    self.game_engine.game_type_id(),
+                    twitch_msg.channel,
+                    twitch_msg.sender_username,
+                    twitch_msg.text
                 );
                 self.game_engine.handle_twitch_message(twitch_msg).await;
             }
@@ -549,7 +560,10 @@ impl LobbyManagerActor {
                             );
                         }
                         unknown => {
-                            tracing::warn!("LobbyManager: Unknown game type '{}'. Defaulting to HelloWorldGame.", unknown);
+                            tracing::warn!(
+                                "LobbyManager: Unknown game type '{}'. Defaulting to HelloWorldGame.",
+                                unknown
+                            );
                             let game_engine = HelloWorldGame::new();
                             actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
@@ -745,7 +759,8 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
             if ws_sender.send(message_to_send).await.is_err() {
                 tracing::info!(
                     "Client {} in lobby {}: WS send error (from actor), client likely disconnected.",
-                    client_id_clone_send, lobby_id_clone_send
+                    client_id_clone_send,
+                    lobby_id_clone_send
                 );
                 break;
             }
@@ -810,7 +825,11 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
                     break;
                 }
                 None => {
-                    tracing::info!("Client {} in lobby {}: WebSocket connection closed (recv - no more messages).", client_id_clone_recv, lobby_id_clone_recv);
+                    tracing::info!(
+                        "Client {} in lobby {}: WebSocket connection closed (recv - no more messages).",
+                        client_id_clone_recv,
+                        lobby_id_clone_recv
+                    );
                     break;
                 }
             }

@@ -218,7 +218,9 @@ impl GameLogic for HelloWorldGame {
                     Err(e) => {
                         tracing::error!(
                             "HelloWorldGame: Failed to deserialize HelloWorldCommand from client {}: {}. Payload: {:?}",
-                            client_id, e, command_data
+                            client_id,
+                            e,
+                            command_data
                         );
                         let err_msg = GenericServerToClientMessage::SystemError {
                             message: format!("Invalid HelloWorldGame command format: {}", e),
@@ -231,7 +233,8 @@ impl GameLogic for HelloWorldGame {
             GenericClientToServerMessage::GlobalCommand { command_name, data } => {
                 tracing::debug!(
                     "HelloWorldGame: Received GlobalCommand (unhandled by HelloWorldGame): name {}, data {:?}",
-                    command_name, data
+                    command_name,
+                    data
                 );
                 // Example: If HelloWorldGame wanted to respond to a global "Echo"
                 if command_name == "Echo" {

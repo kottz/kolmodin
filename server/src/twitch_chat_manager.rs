@@ -184,7 +184,8 @@ impl TwitchChatManagerActor {
                 let normalized_channel_name = channel_name.to_lowercase();
                 tracing::info!(
                     "[TWITCH_MANAGER] Received subscription request for channel '{}' from lobby '{}'",
-                    normalized_channel_name, lobby_id
+                    normalized_channel_name,
+                    lobby_id
                 );
 
                 let mut create_new_actor = true;
@@ -206,7 +207,8 @@ impl TwitchChatManagerActor {
                     } else {
                         tracing::debug!(
                             "[TWITCH_MANAGER] Found existing and non-Terminated TwitchChannelActor for '{}' (Status: {:?}). Reusing.",
-                            normalized_channel_name, current_status
+                            normalized_channel_name,
+                            current_status
                         );
                         obtained_actor_handle = Some(existing_handle.clone());
                         create_new_actor = false;
@@ -283,7 +285,8 @@ impl TwitchChatManagerActor {
                 let normalized_channel_name = channel_name.to_lowercase();
                 tracing::info!(
                     "[TWITCH_MANAGER] Received unsubscribe request for channel '{}' from lobby '{}'",
-                    normalized_channel_name, lobby_id
+                    normalized_channel_name,
+                    lobby_id
                 );
 
                 if let Some(channel_actor_handle) =
@@ -293,7 +296,8 @@ impl TwitchChatManagerActor {
                         Ok(_) => {
                             tracing::info!(
                                 "[TWITCH_MANAGER] Successfully unsubscribed lobby '{}' from channel '{}'",
-                                lobby_id, normalized_channel_name
+                                lobby_id,
+                                normalized_channel_name
                             );
                             let _ = respond_to.send(Ok(()));
                             // Note: We don't remove the channel_actor_handle from active_channels here.
@@ -303,7 +307,9 @@ impl TwitchChatManagerActor {
                         Err(e) => {
                             tracing::error!(
                                 "[TWITCH_MANAGER] Failed to unsubscribe lobby '{}' from channel '{}': {:?}",
-                                lobby_id, normalized_channel_name, e
+                                lobby_id,
+                                normalized_channel_name,
+                                e
                             );
                             let _ = respond_to.send(Err(e));
                         }
@@ -311,7 +317,8 @@ impl TwitchChatManagerActor {
                 } else {
                     tracing::warn!(
                         "[TWITCH_MANAGER] Cannot unsubscribe lobby '{}': Channel '{}' not found or not active.",
-                        lobby_id, normalized_channel_name
+                        lobby_id,
+                        normalized_channel_name
                     );
                     let _ = respond_to.send(Err(TwitchError::ChannelActorTerminated(
                         // Or a more specific "ChannelNotFound" error
@@ -327,7 +334,8 @@ impl TwitchChatManagerActor {
                 let normalized_channel_name = channel_name.to_lowercase();
                 tracing::info!(
                     "[TWITCH_MANAGER] TwitchChannelActor for '{}' (ID: {}) reported termination. Checking if it should be removed from active list.",
-                    normalized_channel_name, actor_id
+                    normalized_channel_name,
+                    actor_id
                 );
 
                 // Only remove if the current handle (if any) matches the actor_id of the one terminating
@@ -352,13 +360,25 @@ impl TwitchChatManagerActor {
                             );
                         } else {
                             // This case should be rare if the get and remove are close.
-                            tracing::warn!("[TWITCH_MANAGER] Tried to remove terminated channel '{}' but it was already gone.", normalized_channel_name);
+                            tracing::warn!(
+                                "[TWITCH_MANAGER] Tried to remove terminated channel '{}' but it was already gone.",
+                                normalized_channel_name
+                            );
                         }
                     } else {
-                        tracing::warn!("[TWITCH_MANAGER] Received termination notice for channel '{}' (ID: {}), but current active actor for this channel is not Terminated (Status: {:?}). Ignoring this potentially stale termination notice.", normalized_channel_name, actor_id, current_status);
+                        tracing::warn!(
+                            "[TWITCH_MANAGER] Received termination notice for channel '{}' (ID: {}), but current active actor for this channel is not Terminated (Status: {:?}). Ignoring this potentially stale termination notice.",
+                            normalized_channel_name,
+                            actor_id,
+                            current_status
+                        );
                     }
                 } else {
-                    tracing::warn!("[TWITCH_MANAGER] Received termination notice for unknown or already removed channel '{}' (ID: {}).", normalized_channel_name, actor_id);
+                    tracing::warn!(
+                        "[TWITCH_MANAGER] Received termination notice for unknown or already removed channel '{}' (ID: {}).",
+                        normalized_channel_name,
+                        actor_id
+                    );
                 }
             }
         }

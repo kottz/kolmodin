@@ -226,7 +226,9 @@ impl GameLogic for GameTwoEcho {
                     Err(e) => {
                         tracing::error!(
                             "GameTwoEcho: Failed to deserialize GameTwoCommand from client {}: {}. Payload: {:?}",
-                            client_id, e, command_data
+                            client_id,
+                            e,
+                            command_data
                         );
                         let err_msg = GenericServerToClientMessage::SystemError {
                             message: format!("Invalid GameTwoEcho command format: {}", e),
@@ -239,7 +241,8 @@ impl GameLogic for GameTwoEcho {
             GenericClientToServerMessage::GlobalCommand { command_name, data } => {
                 tracing::debug!(
                     "GameTwoEcho: Received GlobalCommand (unhandled by GameTwoEcho): name {}, data {:?}",
-                    command_name, data
+                    command_name,
+                    data
                 );
             }
         }

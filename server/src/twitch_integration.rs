@@ -444,7 +444,8 @@ impl TwitchChannelActor {
                 ) {
                     tracing::warn!(
                         "[TWITCH][ACTOR][{}][{}] AddSubscriber received, but actor status is Terminated. Responding with error.",
-                        self.channel_name, self.actor_id
+                        self.channel_name,
+                        self.actor_id
                     );
                     // Actor is shutting down, new subscriptions are not meaningful.
                     let _ = respond_to.send(Err(TwitchError::ChannelActorTerminated(
@@ -453,7 +454,8 @@ impl TwitchChannelActor {
                 } else if task_is_truly_stopped_or_never_started {
                     tracing::info!(
                         "[TWITCH][ACTOR][{}][{}] IRC task is finished or was never started. Calling start_irc_connection_task.",
-                        self.channel_name, self.actor_id
+                        self.channel_name,
+                        self.actor_id
                     );
                     self.start_irc_connection_task(); // This will handle logic for existing finished handles.
                     let _ = respond_to.send(Ok(()));
@@ -463,7 +465,9 @@ impl TwitchChannelActor {
                     // No need to start a new task.
                     tracing::debug!(
                         "[TWITCH][ACTOR][{}][{}] IRC task is active (status: {:?}, handle exists and not finished). Not starting new task.",
-                        self.channel_name, self.actor_id, current_actor_status
+                        self.channel_name,
+                        self.actor_id,
+                        current_actor_status
                     );
                     let _ = respond_to.send(Ok(()));
                 }
@@ -484,7 +488,8 @@ impl TwitchChannelActor {
                 if self.subscribers.is_empty() && self.irc_connection_task_handle.is_some() {
                     tracing::info!(
                         "[TWITCH][ACTOR][{}][{}] No more subscribers. Signalling IRC task to shutdown.",
-                        self.channel_name, self.actor_id
+                        self.channel_name,
+                        self.actor_id
                     );
                     self.signal_irc_task_shutdown();
                 }
@@ -498,7 +503,9 @@ impl TwitchChannelActor {
                         if tx.try_send(parsed_message.clone()).is_err() {
                             tracing::warn!(
                                 "[TWITCH][ACTOR][{}][{}] Failed to send message to subscriber lobby {} (channel full or closed). Removing.",
-                                self.channel_name, self.actor_id, lobby_id
+                                self.channel_name,
+                                self.actor_id,
+                                lobby_id
                             );
                             disconnected_subscribers.push(*lobby_id);
                         }
@@ -509,7 +516,8 @@ impl TwitchChannelActor {
                     if self.subscribers.is_empty() && self.irc_connection_task_handle.is_some() {
                         tracing::info!(
                             "[TWITCH][ACTOR][{}][{}] All subscribers disconnected after send failures. Signalling IRC task to shutdown.",
-                            self.channel_name, self.actor_id
+                            self.channel_name,
+                            self.actor_id
                         );
                         self.signal_irc_task_shutdown();
                     }
@@ -595,13 +603,17 @@ impl TwitchChannelActor {
                             {
                                 tracing::error!(
                                     "[TWITCH][ACTOR][{}][{}] Critical IRC error after loop exit: '{}'. Actor shutting down.",
-                                    self.channel_name, self.actor_id, reason
+                                    self.channel_name,
+                                    self.actor_id,
+                                    reason
                                 );
                                 self.initiate_actor_shutdown().await;
                             } else if self.subscribers.is_empty() {
                                 tracing::info!(
                                     "[TWITCH][ACTOR][{}][{}] IRC loop exited (reason: '{}') and no subscribers. Actor shutting down.",
-                                    self.channel_name, self.actor_id, reason
+                                    self.channel_name,
+                                    self.actor_id,
+                                    reason
                                 );
                                 self.initiate_actor_shutdown().await;
                             } else {
@@ -611,7 +623,9 @@ impl TwitchChannelActor {
                                 // We should attempt to restart the IRC task for the existing subscribers.
                                 tracing::warn!(
                                     "[TWITCH][ACTOR][{}][{}] IRC loop exited (reason: '{}') but actor has subscribers. Attempting to restart IRC task.",
-                                    self.channel_name, self.actor_id, reason
+                                    self.channel_name,
+                                    self.actor_id,
+                                    reason
                                 );
                                 self.start_irc_connection_task();
                             }
@@ -620,7 +634,9 @@ impl TwitchChannelActor {
                             // The actor should stay alive. The loop will manage further status updates.
                             tracing::debug!(
                                 "[TWITCH][ACTOR][{}][{}] IRC connection attempt failed (reason: '{}'), but IRC loop is still active and will retry. Actor remains active.",
-                                self.channel_name, self.actor_id, reason
+                                self.channel_name,
+                                self.actor_id,
+                                reason
                             );
                         }
                     }
@@ -667,17 +683,18 @@ impl TwitchChannelActor {
         if let Some(handle) = &self.irc_connection_task_handle {
             if !handle.is_finished() {
                 tracing::warn!(
-                "[TWITCH][ACTOR][{}][{}] Attempted to start IRC task, but an active (non-finished) one is already running.",
-                self.channel_name,
-                self.actor_id
-            );
+                    "[TWITCH][ACTOR][{}][{}] Attempted to start IRC task, but an active (non-finished) one is already running.",
+                    self.channel_name,
+                    self.actor_id
+                );
                 return;
             }
             // If handle exists but task is finished, take it so we can replace it.
             tracing::debug!(
-            "[TWITCH][ACTOR][{}][{}] Existing IRC task handle is for a finished task. Clearing it.",
-            self.channel_name, self.actor_id
-        );
+                "[TWITCH][ACTOR][{}][{}] Existing IRC task handle is for a finished task. Clearing it.",
+                self.channel_name,
+                self.actor_id
+            );
             self.irc_connection_task_handle.take();
         }
         // If self.irc_connection_task_handle was None, or was Some but finished, it's now None.
@@ -818,7 +835,11 @@ async fn run_irc_connection_loop(
             .await
             .is_err()
         {
-            tracing::error!("[TWITCH][IRC_LOOP][{}][{}] Actor channel closed (Connecting). IRC loop shutting down.", channel_name, actor_id_for_logging);
+            tracing::error!(
+                "[TWITCH][IRC_LOOP][{}][{}] Actor channel closed (Connecting). IRC loop shutting down.",
+                channel_name,
+                actor_id_for_logging
+            );
             return;
         }
 
@@ -843,7 +864,11 @@ async fn run_irc_connection_loop(
         let (reason_for_disconnect, delay_seconds, should_terminate_loop) = match connection_result
         {
             Ok(_) => {
-                tracing::info!("[TWITCH][IRC_LOOP][{}][{}] Connection closed/ended gracefully. Will attempt to reconnect.", channel_name, actor_id_for_logging);
+                tracing::info!(
+                    "[TWITCH][IRC_LOOP][{}][{}] Connection closed/ended gracefully. Will attempt to reconnect.",
+                    channel_name,
+                    actor_id_for_logging
+                );
                 reconnect_attempts = 0;
                 ("Graceful disconnect or RECONNECT".to_string(), 5u64, false)
             }
@@ -865,11 +890,19 @@ async fn run_irc_connection_loop(
                                 },
                             })
                             .await;
-                        tracing::error!("[TWITCH][IRC_LOOP][{}][{}] Persistent authentication failure. IRC loop will terminate.", channel_name, actor_id_for_logging);
+                        tracing::error!(
+                            "[TWITCH][IRC_LOOP][{}][{}] Persistent authentication failure. IRC loop will terminate.",
+                            channel_name,
+                            actor_id_for_logging
+                        );
                         (e.to_string(), 0u64, true)
                     }
                     TwitchError::IrcTaskSendError(_) => {
-                        tracing::error!("[TWITCH][IRC_LOOP][{}][{}] Failed to send to actor. IRC loop shutting down.", channel_name, actor_id_for_logging);
+                        tracing::error!(
+                            "[TWITCH][IRC_LOOP][{}][{}] Failed to send to actor. IRC loop shutting down.",
+                            channel_name,
+                            actor_id_for_logging
+                        );
                         // No need to send status, actor is already gone.
                         (e.to_string(), 0u64, true)
                     }
@@ -900,7 +933,11 @@ async fn run_irc_connection_loop(
             .await
             .is_err()
         {
-            tracing::error!("[TWITCH][IRC_LOOP][{}][{}] Actor channel closed (Reconnecting). IRC loop shutting down.", channel_name, actor_id_for_logging);
+            tracing::error!(
+                "[TWITCH][IRC_LOOP][{}][{}] Actor channel closed (Reconnecting). IRC loop shutting down.",
+                channel_name,
+                actor_id_for_logging
+            );
             return;
         }
 
@@ -967,7 +1004,8 @@ async fn connect_and_listen_irc_single_attempt_adapted(
 
     tracing::info!(
         "[TWITCH][IRC_CONNECT][{}][{}] TCP connected. Requesting capabilities and authenticating...",
-        channel_name, actor_id_for_logging
+        channel_name,
+        actor_id_for_logging
     );
 
     writer
@@ -1137,7 +1175,12 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                     .copied()
                     .unwrap_or_default();
                 if ack_type == "NAK" {
-                    tracing::error!("[TWITCH][IRC_CAP_NAK][{}][{}] Capability NAK: {}. This could affect functionality.", channel_name, actor_id_for_logging, capabilities);
+                    tracing::error!(
+                        "[TWITCH][IRC_CAP_NAK][{}][{}] Capability NAK: {}. This could affect functionality.",
+                        channel_name,
+                        actor_id_for_logging,
+                        capabilities
+                    );
                 } else if ack_type == "ACK" {
                     tracing::info!(
                         "[TWITCH][IRC_CAP_ACK][{}][{}] Capability ACK: {}",
