@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	:root {
+		--background: 0 0% 100%;
+		--foreground: 224 71.4% 4.1%;
+		/* ... (other light mode colors) ... */
+		--primary: 220 90% 50%; /* Example Blue */
+		--primary-foreground: 0 0% 100%;
+		/* ... other colors ... */
+		--radius: 0.5rem;
+		--border: 220 13% 91%; /* Example light mode border */
+		--card: 0 0% 100%; /* Example light mode card background */
+		--card-foreground: 224 71.4% 4.1%; /* Example light mode card text */
+		--muted-foreground: 220 9% 46.1%; /* Example light mode muted text */
+	}
+
+	.dark {
+		/* if using darkMode: 'selector' */
+		--background: 224 71.4% 4.1%;
+		--foreground: 210 20% 98%;
+		/* ... (other dark mode colors) ... */
+		--primary: 210 90% 60%; /* Lighter Blue for dark mode */
+		--primary-foreground: 224 71.4% 4.1%;
+		--border: 215 27.9% 16.9%; /* Example dark mode border */
+		--card: 224 71.4% 4.1%; /* Example dark mode card background */
+		--card-foreground: 210 20% 98%; /* Example dark mode card text */
+		--muted-foreground: 215 20.2% 65.1%; /* Example dark mode muted text */
+		/* ... other colors ... */
+	}
+}
