@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { fade } from 'svelte/transition';
 	import { lobbyStore } from '$lib/stores/lobby.store.svelte'; // To get adminId/lobbyId for manual reconnect
+	import { notificationStore } from '$lib/stores/notification.store.svelte';
 
 	// Reactive state from the WebSocket store
 	const status = $derived(websocketStore.state.status);
@@ -53,7 +54,7 @@
 		const lobbyId = lobbyStore.state.lobbyId;
 
 		if (adminId && lobbyId) {
-			websocketStore.connect(adminId, lobbyId);
+			websocketStore.connect(lobbyId);
 		} else {
 			// This case should be rare if lobbyStore state is managed correctly
 			// but good to handle. Perhaps redirect home.
@@ -73,7 +74,7 @@
 	>
 		<div class="bg-card text-card-foreground w-full max-w-md rounded-lg p-6 shadow-xl sm:p-8">
 			<h2 id="disconnect-title" class="mb-3 text-center text-xl font-semibold sm:text-2xl">
-				{title}
+				{title()}
 			</h2>
 
 			{#if status === ConnectionStatus.RECONNECTING}
@@ -84,14 +85,14 @@
 				</div>
 			{/if}
 
-			{#if message}
-				<p class="text-muted-foreground mb-6 text-center text-sm sm:text-base">{message}</p>
+			{#if message()}
+				<p class="text-muted-foreground mb-6 text-center text-sm sm:text-base">{message()}</p>
 			{/if}
 
 			{#if showManualReconnectButton}
 				<div class="mt-4 flex flex-col items-center space-y-3">
 					<p class="text-muted-foreground text-center text-xs">Automatic reconnection failed.</p>
-					<Button on:click={handleManualReconnect} class="w-full max-w-xs sm:w-auto">
+					<Button onclick={handleManualReconnect} class="w-full max-w-xs sm:w-auto">
 						Try to Reconnect
 					</Button>
 				</div>

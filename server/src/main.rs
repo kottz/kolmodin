@@ -456,6 +456,7 @@ impl LobbyActorHandle {
 #[derive(Debug, Serialize, Clone)]
 struct LobbyDetails {
     lobby_id: Uuid,
+    admin_id: Uuid,
     game_type_created: String,
     twitch_channel_subscribed: Option<String>,
 }
@@ -508,6 +509,7 @@ impl LobbyManagerActor {
                 respond_to,
             } => {
                 let lobby_id = Uuid::new_v4();
+                let admin_id = Uuid::new_v4();
                 let game_type_str_req = requested_game_type
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
@@ -580,6 +582,7 @@ impl LobbyManagerActor {
                     self.lobbies.insert(lobby_id, lobby_actor_handle);
                     let _ = respond_to.send(Ok(LobbyDetails {
                         lobby_id,
+                        admin_id,
                         game_type_created: actual_game_type_created,
                         twitch_channel_subscribed: requested_twitch_channel,
                     }));
@@ -702,58 +705,154 @@ async fn create_lobby_handler(
     }
 }
 
-// --- WebSocket Handler ---
 async fn ws_handler(
     ws_upgrade: WebSocketUpgrade,
-    Path(lobby_id_str): Path<String>,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
-    let lobby_id = match Uuid::parse_str(&lobby_id_str) {
-        Ok(id) => id,
-        Err(_) => {
-            tracing::error!("Invalid lobby ID format in path: {}", lobby_id_str);
-            return (StatusCode::BAD_REQUEST, "Invalid lobby ID format").into_response();
-        }
-    };
-
-    let client_id = Uuid::new_v4();
-    tracing::info!(
-        "WebSocket: Connection attempt for lobby {}, client {}",
-        lobby_id,
-        client_id
-    );
-
-    let lobby_handle = match app_state.lobby_manager.get_lobby_handle(lobby_id).await {
-        Some(handle) => handle,
-        None => {
-            tracing::warn!(
-                "WebSocket: Lobby {} not found for client {}",
-                lobby_id,
-                client_id
-            );
-            return (StatusCode::NOT_FOUND, "Lobby not found").into_response();
-        }
-    };
-
-    ws_upgrade.on_upgrade(move |socket| handle_socket(socket, client_id, lobby_handle))
+    tracing::info!("WebSocket: Connection attempt to generic /ws endpoint");
+    // The lobby_id is no longer known at this stage.
+    // It will be determined by the first message from the client.
+    ws_upgrade.on_upgrade(move |socket| handle_socket(socket, app_state))
 }
 
-async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyActorHandle) {
+async fn handle_socket(socket: WebSocket, app_state: AppState) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // --- Initial Handshake Phase ---
+    let lobby_handle: LobbyActorHandle;
+    let client_id: Uuid;
+
+    match ws_receiver.next().await {
+        Some(Ok(ws::Message::Text(text_msg))) => {
+            tracing::debug!("WS: Received initial message: {}", text_msg);
+            match game_messages::client_message_from_ws_text(&text_msg) {
+                Ok(ClientToServerMessage::ConnectToLobby {
+                    lobby_id: received_lobby_id,
+                }) => {
+                    client_id = Uuid::new_v4(); // Generate client_id after getting lobby_id
+                    tracing::info!(
+                        "WebSocket: Client {} attempting to connect to lobby {} via initial message",
+                        client_id,
+                        received_lobby_id
+                    );
+                    match app_state
+                        .lobby_manager
+                        .get_lobby_handle(received_lobby_id)
+                        .await
+                    {
+                        Some(handle) => {
+                            lobby_handle = handle;
+                            // Optionally, send a confirmation to the client that connection to lobby was successful.
+                            // For example:
+                            // let welcome_msg = ServerToClientMessage::GlobalEvent {
+                            //     event_name: "ConnectedToLobby".to_string(),
+                            //     data: serde_json::json!({ "status": "success", "lobbyId": received_lobby_id }),
+                            // };
+                            // if let Ok(ws_msg) = welcome_msg.to_ws_text() {
+                            //     if ws_sender.send(ws_msg).await.is_err() {
+                            //          tracing::warn!("WS: Failed to send ConnectedToLobby confirmation to client {}. Closing.", client_id);
+                            //          let _ = ws_sender.close().await; // Close before returning if send fails
+                            //          return;
+                            //     }
+                            // }
+                        }
+                        None => {
+                            tracing::warn!(
+                                "WebSocket: Lobby {} not found for client {} (requested via initial message). Closing.",
+                                received_lobby_id,
+                                client_id
+                            );
+                            let error_response = ServerToClientMessage::SystemError {
+                                message: format!("Lobby {} not found.", received_lobby_id),
+                            };
+                            if let Ok(ws_msg) = error_response.to_ws_text() {
+                                let _ = ws_sender.send(ws_msg).await;
+                            }
+                            let _ = ws_sender.close().await; // Close the WebSocket
+                            return;
+                        }
+                    }
+                }
+                Ok(other_msg) => {
+                    // First message was valid JSON but not ConnectToLobby
+                    tracing::warn!(
+                        "WebSocket: Initial message was not ConnectToLobby. Received: {:?}. Closing.",
+                        other_msg
+                    );
+                    let error_response = ServerToClientMessage::SystemError {
+                        message: "Invalid initial message type. Expected ConnectToLobby."
+                            .to_string(),
+                    };
+                    if let Ok(ws_msg) = error_response.to_ws_text() {
+                        let _ = ws_sender.send(ws_msg).await;
+                    }
+                    let _ = ws_sender.close().await;
+                    return;
+                }
+                Err(e) => {
+                    // First message was not valid JSON for ClientToServerMessage
+                    tracing::warn!(
+                        "WebSocket: Failed to deserialize initial message: {}. Raw: '{}'. Closing.",
+                        e,
+                        text_msg
+                    );
+                    let error_response = ServerToClientMessage::SystemError {
+                        message: format!("Invalid initial connection message format: {}", e),
+                    };
+                    if let Ok(ws_msg) = error_response.to_ws_text() {
+                        let _ = ws_sender.send(ws_msg).await;
+                    }
+                    let _ = ws_sender.close().await;
+                    return;
+                }
+            }
+        }
+        Some(Ok(other_type_msg)) => {
+            // First message was not Text (e.g. Binary, Ping, etc.)
+            tracing::warn!(
+                "WS: Client sent non-text initial message: {:?}. Closing.",
+                other_type_msg
+            );
+            let error_response = ServerToClientMessage::SystemError {
+                message: "Initial message must be a text JSON message (ConnectToLobby)."
+                    .to_string(),
+            };
+            if let Ok(ws_msg) = error_response.to_ws_text() {
+                let _ = ws_sender.send(ws_msg).await;
+            }
+            let _ = ws_sender.close().await;
+            return;
+        }
+        Some(Err(e)) => {
+            // WebSocket read error on first message
+            tracing::warn!("WS: Error receiving initial message: {}. Closing.", e);
+            // Cannot reliably send a message back if the receive itself failed badly.
+            let _ = ws_sender.close().await;
+            return;
+        }
+        None => {
+            // Client disconnected before sending any message
+            tracing::info!("WS: Client disconnected before sending initial message. Closing.");
+            // Cannot send a message back if the stream is already closed.
+            return;
+        }
+    }
+    // --- End of Initial Handshake Phase ---
+
     tracing::info!(
         "WebSocket: Client {} now fully handling connection for lobby {}",
         client_id,
         lobby_handle.lobby_id
     );
 
-    let (mut ws_sender, mut ws_receiver) = socket.split();
     let (actor_to_client_tx, mut actor_to_client_rx) = mpsc::channel::<ws::Message>(32);
 
     lobby_handle
         .client_connected(client_id, actor_to_client_tx)
         .await;
 
-    let lobby_id_clone_send = lobby_handle.lobby_id; // For logging
-    let client_id_clone_send = client_id; // For logging
+    let lobby_id_clone_send = lobby_handle.lobby_id; // For logging in send_task
+    let client_id_clone_send = client_id; // For logging in send_task
     let mut send_task = tokio::spawn(async move {
         while let Some(message_to_send) = actor_to_client_rx.recv().await {
             if ws_sender.send(message_to_send).await.is_err() {
@@ -770,12 +869,15 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
             client_id_clone_send,
             lobby_id_clone_send
         );
+        // Attempt to close the sender part of the WebSocket gracefully when the loop ends
+        let _ = ws_sender.close().await;
     });
 
-    let lobby_handle_clone_recv = lobby_handle.clone();
-    let client_id_clone_recv = client_id; // For logging
-    let lobby_id_clone_recv = lobby_handle.lobby_id; // For logging
+    let lobby_handle_clone_recv = lobby_handle.clone(); // For recv_task
+    let client_id_clone_recv = client_id; // For logging in recv_task
+    let lobby_id_clone_recv = lobby_handle.lobby_id; // For logging in recv_task
     let mut recv_task = tokio::spawn(async move {
+        // Note: ws_receiver has already consumed the first message for the handshake.
         loop {
             match ws_receiver.next().await {
                 Some(Ok(msg)) => match msg {
@@ -796,6 +898,10 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
                                 lobby_id_clone_recv,
                                 e
                             );
+                            // This error means the actor might be shut down or its channel is full.
+                            // Consider if the client should be notified or connection closed.
+                            // For now, we just log and continue, but breaking might be appropriate
+                            // if the actor is critical for this connection.
                         }
                     }
                     ws::Message::Binary(_) => {
@@ -805,14 +911,30 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
                             lobby_id_clone_recv
                         );
                     }
-                    ws::Message::Ping(_) | ws::Message::Pong(_) => {}
+                    ws::Message::Ping(ping_data) => {
+                        // Axum's WebSocket implementation typically handles responding to Pings with Pongs automatically.
+                        // If you needed to customize this, you would send a ws::Message::Pong back.
+                        tracing::trace!(
+                            "Client {} in lobby {}: Received Ping from client (data: {:?}). Axum will auto-respond with Pong.",
+                            client_id_clone_recv,
+                            lobby_id_clone_recv,
+                            ping_data
+                        );
+                    }
+                    ws::Message::Pong(_) => {
+                        tracing::trace!(
+                            "Client {} in lobby {}: Received Pong from client.",
+                            client_id_clone_recv,
+                            lobby_id_clone_recv
+                        );
+                    }
                     ws::Message::Close(_) => {
                         tracing::info!(
                             "Client {} in lobby {}: WebSocket closed by client (recv).",
                             client_id_clone_recv,
                             lobby_id_clone_recv
                         );
-                        break;
+                        break; // Exit the recv_task loop
                     }
                 },
                 Some(Err(e)) => {
@@ -822,7 +944,7 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
                         lobby_id_clone_recv,
                         e
                     );
-                    break;
+                    break; // Exit the recv_task loop on error
                 }
                 None => {
                     tracing::info!(
@@ -830,7 +952,7 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
                         client_id_clone_recv,
                         lobby_id_clone_recv
                     );
-                    break;
+                    break; // Exit the recv_task loop as stream ended
                 }
             }
         }
@@ -841,17 +963,19 @@ async fn handle_socket(socket: WebSocket, client_id: Uuid, lobby_handle: LobbyAc
         );
     });
 
+    // Wait for either task to complete, then abort the other.
     tokio::select! {
         _ = (&mut send_task) => {
-            recv_task.abort();
             tracing::debug!("Client {} in lobby {}: Send task finished or aborted, aborting recv_task.", client_id, lobby_handle.lobby_id);
+            recv_task.abort();
         },
         _ = (&mut recv_task) => {
-            send_task.abort();
             tracing::debug!("Client {} in lobby {}: Recv task finished or aborted, aborting send_task.", client_id, lobby_handle.lobby_id);
+            send_task.abort();
         },
     }
 
+    // Notify the lobby actor that this client has disconnected.
     lobby_handle.client_disconnected(client_id).await;
     tracing::info!(
         "WebSocket: Client {} fully disconnected from lobby {}",
@@ -963,7 +1087,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/api/create-lobby", post(create_lobby_handler))
-        .route("/ws/{lobby_id}", any(ws_handler))
+        .route("/ws", any(ws_handler))
         .with_state(app_state)
         .layer(cors);
 

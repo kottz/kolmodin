@@ -682,6 +682,9 @@ impl GameLogic for DealNoDealGame {
             GenericClientToServerMessage::GlobalCommand { .. } => {
                 tracing::trace!("DND: Received GlobalCommand (unhandled by DND specific logic)");
             }
+            _ => {
+                tracing::warn!("DND: Received unrecognized message type");
+            }
         }
     }
 

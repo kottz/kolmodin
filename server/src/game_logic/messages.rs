@@ -1,11 +1,14 @@
 // src/game_logic/messages.rs
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue; // Using an alias for clarity
+use serde_json::Value as JsonValue;
+use uuid::Uuid; // Make sure Uuid is imported
 
 /// Generic messages sent from any Game Client (WebSocket) to the Server.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "message_type", content = "payload")] // "message_type" is the top-level discriminator
+#[serde(tag = "messageType", content = "payload")]
 pub enum ClientToServerMessage {
+    /// Sent by the client immediately after WebSocket connection to associate with a lobby.
+    ConnectToLobby { lobby_id: Uuid },
     /// For commands that are NOT specific to a game instance,
     /// e.g., authentication, lobby chat, or high-level controls.
     GlobalCommand {
@@ -20,15 +23,12 @@ pub enum ClientToServerMessage {
         /// The actual game-specific command, serialized as JSON.
         /// The target game logic will deserialize this into its own command enum/struct.
         command_data: JsonValue,
-        // Optional: If you have multiple instances of the same game type running concurrently
-        // and the client needs to specify which one.
-        // game_instance_id: Option<Uuid>,
     },
 }
 
 /// Generic messages sent from the Server to any Game Client.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "message_type", content = "payload")] // "message_type" is the top-level discriminator
+#[serde(tag = "messageType", content = "payload")] // Using camelCase for JS convention
 pub enum ServerToClientMessage {
     /// For events/responses that are NOT specific to a game instance.
     GlobalEvent {
@@ -43,16 +43,11 @@ pub enum ServerToClientMessage {
         /// The actual game-specific event, serialized as JSON.
         /// The client game logic will deserialize this.
         event_data: JsonValue,
-        // Optional: game_instance_id: Option<Uuid>,
     },
     /// A general error message not tied to a specific game's internal logic error.
     /// Game-specific errors should be part of GameSpecificEvent.
-    SystemError {
-        message: String,
-        // Optional: code: Option<u32>,
-    },
+    SystemError { message: String },
     /// For relaying Twitch chat messages to the game clients.
-    /// This can be considered a special type of GlobalEvent.
     TwitchMessageRelay {
         channel: String,
         sender: String,
@@ -61,13 +56,11 @@ pub enum ServerToClientMessage {
 }
 
 impl ServerToClientMessage {
-    /// Helper to convert this enum into a WebSocket text message.
     pub fn to_ws_text(&self) -> Result<axum::extract::ws::Message, serde_json::Error> {
         serde_json::to_string(self)
             .map(|json_string| axum::extract::ws::Message::Text(json_string.into()))
     }
 
-    /// Helper for game logic to create a GameSpecificEvent easily.
     pub fn new_game_specific_event<S: Serialize>(
         game_type_id: String,
         game_specific_payload: &S,
@@ -79,7 +72,6 @@ impl ServerToClientMessage {
         })
     }
 
-    /// Helper for creating a GlobalEvent.
     pub fn new_global_event<S: Serialize>(
         event_name: String,
         global_payload: &S,
@@ -89,7 +81,6 @@ impl ServerToClientMessage {
     }
 }
 
-/// Helper to convert a string (presumably from a WebSocket text message) into ClientToServerMessage.
 pub fn client_message_from_ws_text(text: &str) -> Result<ClientToServerMessage, serde_json::Error> {
     serde_json::from_str(text)
 }

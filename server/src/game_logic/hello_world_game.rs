@@ -249,6 +249,9 @@ impl GameLogic for HelloWorldGame {
                     }
                 }
             }
+            _ => {
+                tracing::warn!("DND: Received unrecognized message type");
+            }
         }
     }
 

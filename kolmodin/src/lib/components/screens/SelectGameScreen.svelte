@@ -74,14 +74,14 @@
 			// For a robust flow, we might want to await a successful connection confirmation
 			// from websocketStore before navigating, or handle connection failures gracefully.
 			// For now, we initiate connection and navigation.
-			await websocketStore.connect(lobbyDetails.admin_id, lobbyDetails.lobby_id);
+			lobbyStore.setLobbyDetails(lobbyDetails);
+			websocketStore.connect(lobbyDetails.lobby_id);
 
 			// At this point, websocketStore.state.status should be CONNECTING or CONNECTED
 			// We'll optimistically navigate. If WS connection fails, websocketStore/lobbyStore
 			// should reset UIStore.
 
 			// Important: Pass the *confirmed* subscribed Twitch channel from API to lobbyStore
-			lobbyStore.setLobbyDetails(lobbyDetails);
 			uiStore.navigateToGameActive(lobbyDetails.game_type_id);
 			notificationStore.add(`Lobby for "${selectedGame.name}" created!`, 'success');
 		} catch (err) {

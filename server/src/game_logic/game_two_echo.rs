@@ -245,6 +245,9 @@ impl GameLogic for GameTwoEcho {
                     data
                 );
             }
+            _ => {
+                tracing::warn!("DND: Received unrecognized message type");
+            }
         }
     }
 
