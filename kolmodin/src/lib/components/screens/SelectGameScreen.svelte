@@ -120,8 +120,6 @@
 	}
 </script>
 
-// src/lib/components/screens/SelectGameScreen.svelte
-<!-- TEMPLATE REMAINS THE SAME -->
 <div class="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-4 sm:p-6 md:p-8">
 	<Card class="w-full max-w-lg">
 		<CardHeader>

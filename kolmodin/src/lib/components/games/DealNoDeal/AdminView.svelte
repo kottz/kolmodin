@@ -9,8 +9,7 @@
 		CardDescription
 	} from '$lib/components/ui/card';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { info, debug } from '$lib/utils/logger';
-	import type { GamePhaseType } from './types';
+	import { info } from '$lib/utils/logger';
 
 	const dndState = $derived(dealNoDealStore.gameState);
 	const liveVotes = $derived(dealNoDealStore.liveVoteFeed);
@@ -23,45 +22,7 @@
 			dealNoDealStore.gameState.phase === 'DealOrNoDeal_Voting'
 	);
 
-	// This function is called from the template, so it's fine.
-	function getPhaseDescription(phase: GamePhaseType): string {
-		switch (phase.type) {
-			case 'Setup':
-				return 'Game Setup';
-			case 'PlayerCaseSelection_Voting':
-				return 'Player Choosing Their Case (Voting)';
-			case 'RoundCaseOpening_Voting':
-				return `Round ${phase.round_number}: Open ${phase.total_to_open_for_round - phase.opened_so_far_for_round} More Case(s) (Voting)`;
-			case 'BankerOfferCalculation':
-				return `Round ${phase.round_number}: Banker Calculating Offer...`;
-			case 'DealOrNoDeal_Voting':
-				return `Round ${phase.round_number}: Deal or No Deal? (Offer: $${phase.offer.toLocaleString()}) (Voting)`;
-			case 'GameOver':
-				return `Game Over: ${phase.summary}`;
-			default:
-				// Exhaustive check for unhandled phase types during development
-				// const _exhaustiveCheck: never = phase;
-				return 'Unknown Phase';
-		}
-	}
-
-	// This function is called from the template, so it's fine.
-	function isVotingPhaseActive(phase: GamePhaseType): boolean {
-		return (
-			phase.type === 'PlayerCaseSelection_Voting' ||
-			phase.type === 'RoundCaseOpening_Voting' ||
-			phase.type === 'DealOrNoDeal_Voting'
-		);
-	}
-
 	let rawStateForDebug = $derived(JSON.stringify(dndState, null, 2));
-
-	// Use $effect for logging reactive changes
-	$effect(() => {
-		debug('DealNoDeal AdminView rendered/updated. Phase:', dndState.phase.type);
-		// You can log other reactive values here too if needed
-		// debug('Current live votes count:', liveVotes.length);
-	});
 
 	info('DealNoDeal AdminView script executed (runs once on component init).');
 </script>
