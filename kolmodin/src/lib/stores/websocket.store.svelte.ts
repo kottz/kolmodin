@@ -4,7 +4,7 @@ import type {
 	ServerToClientMessage,
 	GameSpecificEventPayload,
 	SystemErrorPayload
-} from '$lib/types/websocket.types'; // Added SystemErrorPayload
+} from '$lib/types/websocket.types';
 import { info, warn, error as logError, debug } from '$lib/utils/logger';
 import { gameEventRouter } from '$lib/services/game.event.router';
 import { lobbyStore } from './lobby.store.svelte';
@@ -13,7 +13,8 @@ import { notificationStore } from './notification.store.svelte';
 export enum ConnectionStatus {
 	INITIAL = 'INITIAL',
 	CONNECTING = 'CONNECTING',
-	CONNECTED = 'CONNECTED',
+	AWAITING_CONNECT_ACK = 'AWAITING_CONNECT_ACK', // New state: socket open, sent Connect, waiting for server ack
+	CONNECTED = 'CONNECTED', // Server has acknowledged the Connect message
 	DISCONNECTED = 'DISCONNECTED',
 	RECONNECTING = 'RECONNECTING',
 	ERROR = 'ERROR'
@@ -24,15 +25,14 @@ interface WebSocketStoreState {
 	lastError: string | null;
 	socket: WebSocket | null;
 	reconnectAttempts: number;
-	lastAdminId: string | null;
-	lastLobbyId: string | null;
+	currentPlayerId: string | null; // This will be the admin_id (player_id of admin)
 }
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const INITIAL_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
-const HEARTBEAT_INTERVAL = 25000;
-const HEARTBEAT_TIMEOUT = 5000;
+const HEARTBEAT_INTERVAL = 25000; // Server pings every 30s, client can send binary heartbeats
+const HEARTBEAT_BYTE_CLIENT_SEND = 0x42; // Client sends 0x42, server echoes it back
 
 function createWebSocketStore() {
 	const state = $state<WebSocketStoreState>({
@@ -40,24 +40,21 @@ function createWebSocketStore() {
 		lastError: null,
 		socket: null,
 		reconnectAttempts: 0,
-		lastAdminId: null,
-		lastLobbyId: null
+		currentPlayerId: null // Store the ID used for the Connect message
 	});
 
 	let reconnectTimeoutId: number | undefined;
-	let heartbeatIntervalId: number | undefined;
-	let heartbeatTimeoutId: number | undefined;
+	// Heartbeat: The server pings, client responds with pong. Client can also send binary heartbeats.
+	// No explicit client-side interval needed for server ping/client pong.
+	// For client-initiated binary heartbeat (if desired for specific proxies/load balancers):
+	let clientHeartbeatIntervalId: number | undefined;
 
-	// Helper to update status and notify lobbyStore
 	function setStatus(newStatus: ConnectionStatus) {
 		const previousStatus = state.status;
 		if (previousStatus !== newStatus) {
 			state.status = newStatus;
-			// Notify lobbyStore of the status change
 			lobbyStore.handleWebSocketStatusChange(newStatus, previousStatus);
 			debug(`WebSocket status changed from ${previousStatus} -> ${newStatus}`);
-		} else {
-			debug(`WebSocket status unchanged: ${newStatus}`);
 		}
 	}
 
@@ -71,72 +68,56 @@ function createWebSocketStore() {
 
 	function clearTimers() {
 		if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
-		if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
-		if (heartbeatTimeoutId) clearTimeout(heartbeatTimeoutId);
+		if (clientHeartbeatIntervalId) clearInterval(clientHeartbeatIntervalId); // Clear client heartbeat
 		reconnectTimeoutId = undefined;
-		heartbeatIntervalId = undefined;
-		heartbeatTimeoutId = undefined;
+		clientHeartbeatIntervalId = undefined;
 	}
 
-	function startHeartbeat() {
-		debug('Starting heartbeat...');
-		stopHeartbeat();
-
-		heartbeatIntervalId = window.setInterval(() => {
-			if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-				debug('Sending Heartbeat');
-				state.socket.send(JSON.stringify({ message_type: 'Heartbeat' }));
-
-				if (heartbeatTimeoutId) clearTimeout(heartbeatTimeoutId);
-				heartbeatTimeoutId = window.setTimeout(() => {
-					warn('Heartbeat timeout: No Pong received.');
-					state.lastError = 'Connection lost (heartbeat timeout)';
-					state.socket?.close(4001, 'Heartbeat Timeout'); // Triggers onclose
-				}, HEARTBEAT_TIMEOUT);
-			} else {
-				warn('Cannot send heartbeat, socket not open or state invalid.');
+	// Optional: Client-initiated binary heartbeat (server echoes this)
+	function startClientHeartbeat() {
+		debug('Starting client-initiated binary heartbeat...');
+		stopClientHeartbeat();
+		clientHeartbeatIntervalId = window.setInterval(() => {
+			if (
+				state.socket &&
+				state.socket.readyState === WebSocket.OPEN &&
+				state.status === ConnectionStatus.CONNECTED
+			) {
+				debug('Client sending binary heartbeat (0x42)');
+				try {
+					state.socket.send(new Uint8Array([HEARTBEAT_BYTE_CLIENT_SEND]));
+				} catch (e) {
+					logError('Failed to send client binary heartbeat:', e);
+				}
 			}
-		}, HEARTBEAT_INTERVAL);
+		}, HEARTBEAT_INTERVAL); // Use same interval as server pings or adjust
 	}
 
-	function stopHeartbeat() {
-		debug('Stopping heartbeat.');
-		if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
-		if (heartbeatTimeoutId) clearTimeout(heartbeatTimeoutId);
-		heartbeatIntervalId = undefined;
-		heartbeatTimeoutId = undefined;
+	function stopClientHeartbeat() {
+		debug('Stopping client-initiated binary heartbeat.');
+		if (clientHeartbeatIntervalId) clearInterval(clientHeartbeatIntervalId);
+		clientHeartbeatIntervalId = undefined;
 	}
 
-	function _connect(adminId: string, lobbyId: string) {
-		if (
-			state.status === ConnectionStatus.CONNECTED &&
-			state.socket?.readyState === WebSocket.OPEN
-		) {
-			// If already connected to the same lobby, potentially re-send Connect or just info.
-			if (state.lastLobbyId === lobbyId && state.lastAdminId === adminId) {
-				info('WebSocket already open and connected to the same lobby.');
-				// Optionally re-send connect if server expects it on page refresh with existing socket
-				// send({ message_type: 'Connect', payload: { admin_id: adminId, lobby_id: lobbyId }});
-				return;
-			}
-			// If connected to a different lobby, disconnect first is handled by `connect`
-		}
-
+	function _connect(playerIdToConnect: string) {
+		// Renamed from adminId for clarity, this is the ID used in Connect msg
 		if (
 			state.status === ConnectionStatus.CONNECTING ||
-			state.status === ConnectionStatus.RECONNECTING
+			state.status === ConnectionStatus.RECONNECTING ||
+			state.status === ConnectionStatus.AWAITING_CONNECT_ACK ||
+			(state.status === ConnectionStatus.CONNECTED && state.currentPlayerId === playerIdToConnect) // Already connected with this ID
 		) {
-			info('WebSocket connection attempt already in progress for this or another lobby.');
+			info(
+				`WebSocket connection attempt for player ${playerIdToConnect} already in progress or completed with this ID.`
+			);
 			return;
 		}
 
 		clearTimers();
+		state.currentPlayerId = playerIdToConnect; // Store the ID we will send in Connect message
 
-		state.lastAdminId = adminId;
-		state.lastLobbyId = lobbyId;
-
-		const wsUrl = `${PUBLIC_WS_BASE_URL}/ws/${lobbyId}`;
-		info(`Attempting to connect to WebSocket: ${wsUrl}`);
+		const wsUrl = `${PUBLIC_WS_BASE_URL}/ws`; // Generic WebSocket endpoint
+		info(`Attempting to connect to WebSocket: ${wsUrl} for player ${playerIdToConnect}`);
 		setStatus(
 			state.reconnectAttempts > 0 ? ConnectionStatus.RECONNECTING : ConnectionStatus.CONNECTING
 		);
@@ -144,37 +125,83 @@ function createWebSocketStore() {
 
 		try {
 			const newSocket = new WebSocket(wsUrl);
-			state.socket = newSocket; // Assign new socket to state
+			state.socket = newSocket;
 
 			newSocket.onopen = () => {
-				info('WebSocket connection established.');
-				setStatus(ConnectionStatus.CONNECTED);
-				state.lastError = null;
-				resetReconnectAttempts(); // Crucial: reset attempts on successful open
-				startHeartbeat();
+				info(
+					`WebSocket underlying connection open for player ${playerIdToConnect}. Sending Connect message...`
+				);
+				// DO NOT set to CONNECTED yet. Wait for server's response to our Connect message.
+				setStatus(ConnectionStatus.AWAITING_CONNECT_ACK);
+				state.lastError = null; // Clear error on new attempt
 
 				send({
 					message_type: 'Connect',
-					payload: { admin_id: adminId, lobby_id: lobbyId }
+					payload: { player_id: playerIdToConnect } // Use the provided playerId (admin_id from createLobby)
 				});
+				// Heartbeat starts after server acknowledges Connect (e.g. via ConnectionAck or first GameState)
 			};
 
 			newSocket.onmessage = (event: MessageEvent) => {
-				if (heartbeatTimeoutId) clearTimeout(heartbeatTimeoutId); // Clear pong timeout on ANY message
-				heartbeatTimeoutId = undefined;
-
 				try {
+					// Handle binary heartbeat echo from server
+					if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+						const reader = new FileReader();
+						reader.onload = function () {
+							const arrayBuffer = this.result as ArrayBuffer;
+							const byteArray = new Uint8Array(arrayBuffer);
+							if (byteArray.length === 1 && byteArray[0] === HEARTBEAT_BYTE_CLIENT_SEND) {
+								debug('Client received binary heartbeat echo from server.');
+							} else {
+								warn('Client received unexpected binary message:', byteArray);
+							}
+						};
+						if (event.data instanceof Blob) {
+							reader.readAsArrayBuffer(event.data);
+						} else if (event.data instanceof ArrayBuffer) {
+							// Directly process ArrayBuffer if not needing FileReader
+							const byteArray = new Uint8Array(event.data);
+							if (byteArray.length === 1 && byteArray[0] === HEARTBEAT_BYTE_CLIENT_SEND) {
+								debug('Client received binary heartbeat echo from server (ArrayBuffer).');
+							} else {
+								warn('Client received unexpected binary message (ArrayBuffer):', byteArray);
+							}
+						}
+						return;
+					}
+
 					const message = JSON.parse(event.data as string) as ServerToClientMessage;
 					debug('WebSocket message received:', message);
 
+					// If we were waiting for Connect ACK and get any valid app message,
+					// consider the connection fully established.
+					if (state.status === ConnectionStatus.AWAITING_CONNECT_ACK) {
+						if (message.message_type !== 'SystemError') {
+							// Unless it's an error related to Connect
+							info(
+								'WebSocket application-level connection confirmed (received first valid message post-Connect).'
+							);
+							setStatus(ConnectionStatus.CONNECTED);
+							resetReconnectAttempts(); // Reset on successful logical connection
+							startClientHeartbeat(); // Start client-side binary heartbeat if desired
+							// Server also pings, so this client one is optional
+						}
+					}
+
 					switch (message.message_type) {
-						case 'Pong':
-							debug('Pong received');
-							break;
+						// Pong from server to client's ping is handled by browser/WS library typically
+						// No explicit 'Pong' message_type needed from our app protocol if server handles native pings
 						case 'GameSpecificEvent':
 							gameEventRouter.routeGameSpecificEvent(message.payload as GameSpecificEventPayload);
 							break;
-						case 'ConnectionAck':
+						case 'ConnectionAck': // Server might send this after successful internal Connect processing
+							// This is where we'd definitively move to CONNECTED if we haven't already
+							if (state.status !== ConnectionStatus.CONNECTED) {
+								info('ConnectionAck received. Finalizing connection.');
+								setStatus(ConnectionStatus.CONNECTED);
+								resetReconnectAttempts();
+								startClientHeartbeat();
+							}
 							lobbyStore.handleConnectionAck(message.payload);
 							break;
 						case 'GlobalEvent':
@@ -185,7 +212,13 @@ function createWebSocketStore() {
 								'WebSocket Store: Received SystemError from server:',
 								message.payload.message
 							);
-							lobbyStore.handleSystemError(message.payload as SystemErrorPayload); // Ensure type
+							lobbyStore.handleSystemError(message.payload as SystemErrorPayload);
+							if (state.status === ConnectionStatus.AWAITING_CONNECT_ACK) {
+								// If error occurs while waiting for connect ack, connection failed
+								setStatus(ConnectionStatus.ERROR);
+								state.lastError = message.payload.message;
+								state.socket?.close(4002, 'Connect message processing failed'); // Close socket
+							}
 							break;
 						case 'TwitchMessageRelay':
 							lobbyStore.handleTwitchMessageRelay(message.payload);
@@ -207,24 +240,23 @@ function createWebSocketStore() {
 			};
 
 			newSocket.onerror = (event: Event) => {
-				// Browsers often fire 'error' then 'close'. 'onclose' handles status and reconnection.
-				logError('WebSocket error event occurred. Details should follow in onclose.', event);
-				state.lastError = state.lastError || 'WebSocket connection error occurred.';
+				logError('WebSocket error event occurred. See onclose for status update.', event);
+				state.lastError = state.lastError || 'WebSocket connection error.';
+				// `onclose` will usually follow and handle state transition + reconnection.
 			};
 
 			newSocket.onclose = (event: CloseEvent) => {
 				info(
 					`WebSocket connection closed. Code: ${event.code}, Reason: '${event.reason}', Clean: ${event.wasClean}`
 				);
-				const previousStatusBeforeCloseLogic = state.status; // Capture status before it's changed below
-				stopHeartbeat();
+				const statusBeforeClose = state.status;
+				stopClientHeartbeat();
 				state.socket = null;
 
-				// If status was already set to DISCONNECTED (manual disconnect), do nothing more here.
-				if (previousStatusBeforeCloseLogic === ConnectionStatus.DISCONNECTED) {
-					info('WebSocket was manually disconnected. No further action in onclose.');
+				if (statusBeforeClose === ConnectionStatus.DISCONNECTED) {
+					info('WebSocket was manually disconnected.');
 					// setStatus(ConnectionStatus.DISCONNECTED) was already called.
-					resetReconnectAttempts(); // Ensure attempts are reset.
+					resetReconnectAttempts();
 					return;
 				}
 
@@ -232,21 +264,21 @@ function createWebSocketStore() {
 					state.lastError ||
 					`Connection closed (Code: ${event.code}${event.reason ? ` - Reason: ${event.reason}` : ''})`;
 
-				if (event.code !== 1000) {
-					// Abnormal closure (not a clean server close or client disconnect)
-					attemptReconnect(); // This will set status to RECONNECTING or ERROR
+				if (event.code !== 1000 || statusBeforeClose === ConnectionStatus.AWAITING_CONNECT_ACK) {
+					// Abnormal closure, or closed by server while we were trying to logically connect
+					attemptReconnect();
 				} else {
 					// Clean closure (code 1000)
-					if (previousStatusBeforeCloseLogic === ConnectionStatus.CONNECTED) {
+					if (statusBeforeClose === ConnectionStatus.CONNECTED) {
 						notificationStore.add('Connection cleanly closed by server.', 'info');
-						setStatus(ConnectionStatus.ERROR); // Treat as session ended by server
+						setStatus(ConnectionStatus.ERROR); // Session ended by server
 					} else {
-						// Cleanly closed during CONNECTING/RECONNECTING implies server rejected the attempt
+						// This case should be less likely if AWAITING_CONNECT_ACK + close leads to attemptReconnect
 						setStatus(ConnectionStatus.ERROR);
 						state.lastError =
-							state.lastError || 'Server cleanly closed connection during attempt (rejected).';
+							state.lastError || 'Server cleanly closed connection during an unexpected state.';
 					}
-					resetReconnectAttempts(); // No auto-reconnect for clean server closes or rejections
+					resetReconnectAttempts();
 				}
 			};
 		} catch (err) {
@@ -254,17 +286,18 @@ function createWebSocketStore() {
 			setStatus(ConnectionStatus.ERROR);
 			state.lastError = 'Failed to initialize WebSocket connection.';
 			state.socket = null;
-			attemptReconnect();
+			if (state.currentPlayerId) attemptReconnect(); // Only if we had a player ID to try with
 		}
 	}
 
 	function attemptReconnect() {
-		if (!state.lastAdminId || !state.lastLobbyId) {
-			warn('Cannot reconnect: adminId or lobbyId not available.');
+		if (!state.currentPlayerId) {
+			// Changed from lastAdminId/lastLobbyId
+			warn('Cannot reconnect: currentPlayerId for Connect message not available.');
 			setStatus(ConnectionStatus.ERROR);
-			state.lastError = 'Reconnection details lost.';
-			resetReconnectAttempts(); // Prevent further attempts
-			return; // lobbyStore will be notified by setStatus(ERROR)
+			state.lastError = 'Reconnection details (currentPlayerId) lost.';
+			resetReconnectAttempts();
+			return;
 		}
 
 		if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
@@ -272,7 +305,6 @@ function createWebSocketStore() {
 			setStatus(ConnectionStatus.ERROR);
 			state.lastError = state.lastError || 'Failed to reconnect after multiple attempts.';
 			resetReconnectAttempts();
-			// lobbyStore is notified via setStatus(ERROR) and will call its cleanup
 			return;
 		}
 
@@ -283,71 +315,73 @@ function createWebSocketStore() {
 		);
 
 		info(
-			`Attempting reconnect ${state.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay / 1000}s...`
+			`Attempting reconnect ${state.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} for player ${state.currentPlayerId} in ${delay / 1000}s...`
 		);
 		setStatus(ConnectionStatus.RECONNECTING);
 
 		reconnectTimeoutId = window.setTimeout(() => {
 			if (state.status === ConnectionStatus.DISCONNECTED) {
-				// Check if manually disconnected during timeout
 				info('Reconnect attempt cancelled due to manual disconnect.');
 				return;
 			}
-			// Ensure IDs are still present (should be, but defensive)
-			if (state.lastAdminId && state.lastLobbyId) {
-				_connect(state.lastAdminId, state.lastLobbyId);
+			if (state.currentPlayerId) {
+				// Re-check, should be set
+				_connect(state.currentPlayerId);
 			} else {
-				// Should have been caught by the initial check in attemptReconnect
-				warn('Reconnect aborted: adminId or lobbyId became null unexpectedly.');
+				warn('Reconnect aborted during timeout: currentPlayerId became null.');
 				setStatus(ConnectionStatus.ERROR);
-				state.lastError = 'Lost reconnection details during backoff.';
+				state.lastError = 'Lost reconnection details during backoff (currentPlayerId).';
 			}
 		}, delay);
 	}
 
-	function connect(adminId: string, lobbyId: string): void {
-		info('Manual connect initiated by application.');
-		clearTimers(); // Clear any existing reconnect or heartbeat timers
+	// This 'playerId' is the admin_id from createLobby response
+	function connect(playerId: string): void {
+		if (!playerId) {
+			logError('WebSocket connect called without a playerId.');
+			notificationStore.add('Cannot connect: Player ID is missing.', 'destructive');
+			return;
+		}
+		info(`Application requested WebSocket connection for player: ${playerId}`);
+		clearTimers();
 		resetReconnectAttempts();
 
 		if (state.socket) {
-			info('An existing WebSocket connection/attempt is present. Closing it before new connect.');
-			// To prevent the onclose of the *old* socket from triggering auto-reconnect logic for the old session:
-			state.socket.onclose = null; // Detach old onclose handler
-			state.socket.onerror = null; // Detach old onerror
+			info('An existing WebSocket is present. Closing it before new connect.');
+			state.socket.onclose = null;
+			state.socket.onerror = null;
 			state.socket.onopen = null;
 			state.socket.onmessage = null;
 			state.socket.close(1000, 'Client initiating new connection');
 			state.socket = null;
 		}
-		setStatus(ConnectionStatus.INITIAL); // Set status for the new attempt
-		_connect(adminId, lobbyId);
+		setStatus(ConnectionStatus.INITIAL);
+		_connect(playerId);
 	}
 
 	function disconnect(): void {
-		info('Manual disconnect initiated by application.');
+		info('Application requested WebSocket disconnect.');
 		clearTimers();
 		resetReconnectAttempts();
 		const oldStatus = state.status;
 
 		if (state.socket) {
-			// Set status BEFORE closing to ensure onclose handler knows it's manual
-			setStatus(ConnectionStatus.DISCONNECTED);
+			setStatus(ConnectionStatus.DISCONNECTED); // Set BEFORE closing
 			state.socket.close(1000, 'Client initiated disconnect');
-			// onclose will handle setting state.socket = null
 		} else {
-			// If no socket, but status wasn't DISCONNECTED, update it.
 			if (oldStatus !== ConnectionStatus.DISCONNECTED) {
 				setStatus(ConnectionStatus.DISCONNECTED);
 			}
 		}
-		// Clearing lastAdminId/LobbyId here means no "reconnect to previous session" feature after manual disconnect.
-		// state.lastAdminId = null;
-		// state.lastLobbyId = null;
+		state.currentPlayerId = null; // Clear current player ID on manual disconnect
 	}
 
 	function send(message: ClientToServerMessage): void {
-		if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+		if (
+			state.socket &&
+			state.socket.readyState === WebSocket.OPEN &&
+			state.status === ConnectionStatus.CONNECTED
+		) {
 			try {
 				const messageString = JSON.stringify(message);
 				state.socket.send(messageString);
@@ -358,9 +392,14 @@ function createWebSocketStore() {
 				notificationStore.add('Error sending message to server.', 'destructive');
 			}
 		} else {
-			warn('WebSocket not open. Cannot send message:', message);
+			warn(
+				'WebSocket not open or not fully connected. Cannot send message:',
+				message,
+				'Status:',
+				state.status
+			);
 			state.lastError = 'Connection not available to send message.';
-			notificationStore.add('Cannot send message: Not connected to server.', 'warning');
+			notificationStore.add('Cannot send message: Not fully connected to server.', 'warning');
 		}
 	}
 
