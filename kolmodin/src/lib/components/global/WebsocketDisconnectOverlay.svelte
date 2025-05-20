@@ -9,12 +9,14 @@
 	const status = $derived(websocketStore.state.status);
 	const lastError = $derived(websocketStore.state.lastError);
 	const reconnectAttempts = $derived(websocketStore.state.reconnectAttempts);
+	const wasManuallyDisconnected = $derived(websocketStore.state.wasManuallyDisconnected); // <<< ADDED
 
 	// Derived state for UI logic
 	const showOverlay = $derived(
-		status === ConnectionStatus.DISCONNECTED ||
+		(status === ConnectionStatus.DISCONNECTED ||
 			status === ConnectionStatus.ERROR ||
-			status === ConnectionStatus.RECONNECTING
+			status === ConnectionStatus.RECONNECTING) &&
+			!wasManuallyDisconnected // <<< MODIFIED: Do not show if manually disconnected
 	);
 
 	const title = $derived(() => {
@@ -24,9 +26,11 @@
 			case ConnectionStatus.ERROR:
 				return 'Connection Error';
 			case ConnectionStatus.DISCONNECTED:
+				// This message now correctly applies to unexpected disconnections
 				return 'Disconnected from Server';
 			default:
-				return 'Connection Issue'; // Should not be hit if showOverlay is correct
+				// This case should ideally not be hit if showOverlay is true
+				return 'Connection Issue';
 		}
 	});
 
@@ -35,9 +39,8 @@
 			return lastError;
 		}
 		if (status === ConnectionStatus.DISCONNECTED && lastError) {
-			// If there was an error leading to disconnect, show it.
-			// Otherwise, it might be a clean disconnect by server or manual.
-			return lastError || 'You have been disconnected.';
+			// If overlay is shown for DISCONNECTED, it was unexpected.
+			return lastError || 'You have been unexpectedly disconnected.';
 		}
 		if (status === ConnectionStatus.RECONNECTING) {
 			return 'Attempting to restore your session...';
@@ -46,7 +49,9 @@
 	});
 
 	const showManualReconnectButton = $derived(
-		status === ConnectionStatus.ERROR && reconnectAttempts >= 5 // Or whatever MAX_RECONNECT_ATTEMPTS is in websocketStore
+		status === ConnectionStatus.ERROR &&
+			!wasManuallyDisconnected && // Ensures it's not shown if error state resulted from a manual disconnect scenario (though unlikely)
+			reconnectAttempts >= websocketStore.MAX_RECONNECT_ATTEMPTS // Assuming MAX_RECONNECT_ATTEMPTS is exported or use literal 5
 	);
 
 	function handleManualReconnect() {
@@ -54,12 +59,11 @@
 		const lobbyId = lobbyStore.state.lobbyId;
 
 		if (adminId && lobbyId) {
+			// When manually reconnecting, it's a new attempt, so wasManuallyDisconnected should be false.
+			// The connect method already handles setting wasManuallyDisconnected = false.
 			websocketStore.connect(lobbyId);
 		} else {
-			// This case should be rare if lobbyStore state is managed correctly
-			// but good to handle. Perhaps redirect home.
 			notificationStore.add('Cannot reconnect: Session details are missing.', 'destructive');
-			// uiStore.navigateToHome(); // Example action
 		}
 	}
 </script>
