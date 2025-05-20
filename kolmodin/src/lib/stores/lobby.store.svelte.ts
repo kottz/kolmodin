@@ -33,7 +33,7 @@ function createLobbyStore() {
 		info('LobbyStore: Setting lobby details:', details);
 		state.lobbyId = details.lobby_id;
 		state.adminId = details.admin_id;
-		state.activeGameTypeId = details.game_type_id;
+		state.activeGameTypeId = details.game_type_created;
 		state.subscribedTwitchChannel = details.twitch_channel_subscribed;
 		state.isLobbyActive = true;
 		state.twitchIrcStatus = details.twitch_channel_subscribed ? 'Connecting...' : 'N/A';

@@ -14,12 +14,14 @@
 
 	const dndState = $derived(dealNoDealStore.gameState);
 	const liveVotes = $derived(dealNoDealStore.liveVoteFeed);
-
-	const TOTAL_CASES = 22;
-	const ALL_MONEY_VALUES: number[] = [
-		1, 5, 10, 25, 50, 75, 100, 200, 300, 400, 500, 750, 1000, 5000, 10000, 25000, 50000, 75000,
-		100000, 250000, 500000, 1000000
-	].sort((a, b) => a - b);
+	const sortedCases = $derived(dealNoDealStore.gameState.briefcase_values.sort().reverse());
+	const currentPhase = $derived(dealNoDealStore.gameState.phase.type);
+	const isVotingPhase = $derived(
+		() =>
+			dealNoDealStore.gameState.phase === 'PlayerCaseSelection_Voting' ||
+			dealNoDealStore.gameState.phase === 'RoundCaseOpening_Voting' ||
+			dealNoDealStore.gameState.phase === 'DealOrNoDeal_Voting'
+	);
 
 	// This function is called from the template, so it's fine.
 	function getPhaseDescription(phase: GamePhaseType): string {
@@ -69,7 +71,7 @@
 		<CardHeader>
 			<CardTitle>Deal or No Deal - Admin Panel</CardTitle>
 			<CardDescription>
-				Phase: <span class="text-primary font-semibold">{getPhaseDescription(dndState.phase)}</span>
+				Phase: <span class="text-primary font-semibold">{currentPhase}</span>
 			</CardDescription>
 		</CardHeader>
 		<CardContent class="space-y-4">
@@ -103,8 +105,8 @@
 				<CardHeader><CardTitle>Briefcases</CardTitle></CardHeader>
 				<CardContent>
 					{#if dndState.briefcase_values.length > 0}
-						<div class="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7">
-							{#each { length: TOTAL_CASES } as _, i (i)}
+						<div class="grid grid-cols-12 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7">
+							{#each { length: dndState.briefcase_values.length } as _, i (i)}
 								{@const caseIndex = i}
 								<!-- Ensure dndState properties are accessed safely, especially array indices -->
 								{@const isOpened = dndState.briefcase_is_opened?.[caseIndex]}
@@ -148,7 +150,7 @@
 					<CardHeader><CardTitle>Money Board</CardTitle></CardHeader>
 					<CardContent>
 						<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-							{#each ALL_MONEY_VALUES as moneyValue (moneyValue)}
+							{#each dndState.briefcase_values as moneyValue (moneyValue)}
 								<!-- Corrected class_name to class -->
 								<div
 									class={!dndState.remaining_money_values_in_play?.includes(moneyValue)
@@ -164,7 +166,7 @@
 					</CardContent>
 				</Card>
 
-				{#if isVotingPhaseActive(dndState.phase)}
+				{#if isVotingPhase}
 					<Card>
 						<CardHeader><CardTitle>Vote Status</CardTitle></CardHeader>
 						<CardContent>

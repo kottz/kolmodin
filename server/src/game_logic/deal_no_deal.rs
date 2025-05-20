@@ -16,10 +16,10 @@ use crate::twitch_integration::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_DND: &str = "DealNoDeal";
 
-const TOTAL_CASES: u8 = 22;
+const TOTAL_CASES: u8 = 26;
 const MONEY_VALUES: [u64; TOTAL_CASES as usize] = [
-    1, 5, 10, 25, 50, 75, 100, 200, 300, 400, 500, 750, 1_000, 5_000, 10_000, 25_000, 50_000,
-    75_000, 100_000, 250_000, 500_000, 1_000_000,
+    1, 3, 5, 10, 25, 50, 75, 100, 200, 300, 400, 500, 750, 1_000, 5_000, 10_000, 25_000, 50_000,
+    75_000, 100_000, 200_000, 300_000, 400_000, 500_000, 750_000, 1_000_000,
 ];
 const ROUND_SCHEDULE: [u8; 6] = [6, 5, 4, 3, 2, 1];
 
