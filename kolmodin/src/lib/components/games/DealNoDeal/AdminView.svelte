@@ -75,17 +75,10 @@
 		<CardContent class="space-y-4">
 			<div class="flex space-x-2">
 				<!-- Use onclick for Svelte 5 event handling on components -->
-				<Button
-					onclick={dealNoDealStore.actions.startGame}
-					disabled={!(dndState.phase.type === 'Setup' || dndState.phase.type === 'GameOver')}
-				>
+				<Button onclick={dealNoDealStore.actions.startGame}>
 					{#if dndState.phase.type === 'GameOver'}Restart Game{:else}Start Game{/if}
 				</Button>
-				<Button
-					onclick={dealNoDealStore.actions.concludeVotingAndProcess}
-					disabled={!isVotingPhaseActive(dndState.phase)}
-					variant="secondary"
-				>
+				<Button onclick={dealNoDealStore.actions.concludeVotingAndProcess} variant="secondary">
 					Conclude Voting & Process
 				</Button>
 			</div>

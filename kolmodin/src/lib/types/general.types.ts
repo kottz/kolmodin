@@ -7,7 +7,7 @@ export interface AvailableGame {
 export interface LobbyDetails {
 	lobby_id: string;
 	admin_id: string; // The ID for the admin to connect via WebSocket
-	game_type_id: string;
+	game_type_created: string;
 	twitch_channel_subscribed: string | null; // Actual channel server connected to
 }
 

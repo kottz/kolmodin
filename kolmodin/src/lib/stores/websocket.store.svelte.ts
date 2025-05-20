@@ -1,30 +1,29 @@
 // src/lib/stores/websocket.store.svelte.ts
 
 import { PUBLIC_WS_BASE_URL } from '$env/static/public';
-// Ensure this import path and types are correct after changes
 import type {
 	ClientToServerMessage,
 	ServerToClientMessage,
 	GameSpecificEventPayload,
 	SystemErrorPayload,
-	ConnectToLobbyPayload, // New payload type
-	ConnectionAckPayload, // For server's ack
+	ConnectToLobbyPayload, // For sending Client -> Server
+	ConnectionAckPayload, // For receiving Server -> Client
 	GlobalEventPayload,
 	TwitchMessageRelayPayload
-} from '$lib/types/websocket.types';
+} from '$lib/types/websocket.types'; // Ensure these types use PascalCase for messageType variants
 import { info, warn, error as logError, debug } from '$lib/utils/logger';
 import { gameEventRouter } from '$lib/services/game.event.router';
 import { lobbyStore } from './lobby.store.svelte';
 import { notificationStore } from './notification.store.svelte';
 
 export enum ConnectionStatus {
-	INITIAL = 'INITIAL',
+	INITIAL = 'INITIAL', // Before any connection attempt
 	CONNECTING = 'CONNECTING', // Underlying WebSocket is attempting to open
 	AWAITING_CONNECT_ACK = 'AWAITING_CONNECT_ACK', // Socket open, sent ConnectToLobby, waiting for server ack/response
 	CONNECTED = 'CONNECTED', // Server has acknowledged/responded positively to ConnectToLobby
-	DISCONNECTED = 'DISCONNECTED',
-	RECONNECTING = 'RECONNECTING',
-	ERROR = 'ERROR'
+	DISCONNECTED = 'DISCONNECTED', // Deliberately disconnected by client or cleanly by server (expected)
+	RECONNECTING = 'RECONNECTING', // Attempting to reconnect after an unexpected closure
+	ERROR = 'ERROR' // An error occurred preventing connection or during active session
 }
 
 interface WebSocketStoreState {
@@ -32,17 +31,12 @@ interface WebSocketStoreState {
 	lastError: string | null;
 	socket: WebSocket | null;
 	reconnectAttempts: number;
-	// currentLobbyId is important for sending the ConnectToLobby message
-	// and for knowing which lobby we *think* we are connected to.
-	currentLobbyId: string | null;
+	currentLobbyId: string | null; // The lobby ID we are trying to connect/are connected to
 }
 
 const MAX_RECONNECT_ATTEMPTS = 5;
-const INITIAL_RECONNECT_DELAY = 1000;
-const MAX_RECONNECT_DELAY = 30000;
-// Server pings, client automatically Pongs. Binary heartbeat is optional for client.
-// const HEARTBEAT_INTERVAL = 25000;
-// const HEARTBEAT_BYTE_CLIENT_SEND = 0x42;
+const INITIAL_RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 30000;
 
 function createWebSocketStore() {
 	const state = $state<WebSocketStoreState>({
@@ -50,17 +44,22 @@ function createWebSocketStore() {
 		lastError: null,
 		socket: null,
 		reconnectAttempts: 0,
-		currentLobbyId: null // Store the lobby ID we intend to connect to
+		currentLobbyId: null
 	});
 
 	let reconnectTimeoutId: number | undefined;
-	// let clientHeartbeatIntervalId: number | undefined; // Optional binary heartbeat
+
+	// For the Promise returned by the public connect() method
+	let currentExternalConnectPromise: {
+		resolve: () => void;
+		reject: (reason?: any) => void;
+	} | null = null;
 
 	function setStatus(newStatus: ConnectionStatus) {
 		const previousStatus = state.status;
 		if (previousStatus !== newStatus) {
 			state.status = newStatus;
-			// Notify lobbyStore about the status change if it needs to react
+			// Notify lobbyStore about the status change for potential UI/state adjustments
 			lobbyStore.handleWebSocketStatusChange(newStatus, previousStatus);
 			debug(`WebSocket status changed from ${previousStatus} -> ${newStatus}`);
 		}
@@ -74,35 +73,42 @@ function createWebSocketStore() {
 		}
 	}
 
-	function clearTimers() {
+	function clearAllTimers() {
 		if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
-		// if (clientHeartbeatIntervalId) clearInterval(clientHeartbeatIntervalId);
 		reconnectTimeoutId = undefined;
-		// clientHeartbeatIntervalId = undefined;
 	}
 
-	// Client-initiated binary heartbeat is optional. Server already Pings.
-	// function startClientHeartbeat() { /* ... */ }
-	// function stopClientHeartbeat() { /* ... */ }
+	function _handleExternalPromiseResolution() {
+		if (currentExternalConnectPromise) {
+			currentExternalConnectPromise.resolve();
+			currentExternalConnectPromise = null;
+		}
+	}
 
-	// The `lobbyIdToConnect` is the one received from the `/api/create-lobby` endpoint.
-	function _connect(lobbyIdToConnect: string) {
-		if (
-			state.status === ConnectionStatus.CONNECTING ||
-			state.status === ConnectionStatus.RECONNECTING ||
-			state.status === ConnectionStatus.AWAITING_CONNECT_ACK ||
-			(state.status === ConnectionStatus.CONNECTED && state.currentLobbyId === lobbyIdToConnect)
-		) {
-			info(
-				`WebSocket connection attempt for lobby ${lobbyIdToConnect} already in progress or completed with this ID.`
-			);
-			return;
+	function _handleExternalPromiseRejection(reasonMessage: string, error?: any) {
+		if (currentExternalConnectPromise) {
+			currentExternalConnectPromise.reject(error || new Error(reasonMessage));
+			currentExternalConnectPromise = null;
+		}
+	}
+
+	// Internal connect function, not directly returning a promise here,
+	// but interacts with currentExternalConnectPromise
+	function _initiateConnectionSequence(lobbyIdToConnect: string) {
+		// If a socket exists from a previous attempt, ensure it's fully cleaned up.
+		if (state.socket) {
+			info('Found existing socket, ensuring it is closed before creating new one.');
+			// Nullify handlers to prevent them from firing for the old socket
+			state.socket.onopen = null;
+			state.socket.onmessage = null;
+			state.socket.onerror = null;
+			state.socket.onclose = null;
+			state.socket.close(1000, 'Client re-initiating connection');
+			state.socket = null;
 		}
 
-		clearTimers();
-		state.currentLobbyId = lobbyIdToConnect; // Store the lobby ID we will send in ConnectToLobby
-
-		const wsUrl = `${PUBLIC_WS_BASE_URL}/ws`; // Generic WebSocket endpoint
+		state.currentLobbyId = lobbyIdToConnect; // Track the lobby we're trying for
+		const wsUrl = `${PUBLIC_WS_BASE_URL}/ws`;
 		info(`Attempting to connect to WebSocket: ${wsUrl} for lobby ${lobbyIdToConnect}`);
 		setStatus(
 			state.reconnectAttempts > 0 ? ConnectionStatus.RECONNECTING : ConnectionStatus.CONNECTING
@@ -120,54 +126,53 @@ function createWebSocketStore() {
 				setStatus(ConnectionStatus.AWAITING_CONNECT_ACK);
 				state.lastError = null;
 
-				// Send the ConnectToLobby message
 				const connectPayload: ConnectToLobbyPayload = { lobby_id: lobbyIdToConnect };
-				sendRawJson({ messageType: 'ConnectToLobby', payload: connectPayload });
+				// Use PascalCase for messageType if server expects it
+				sendRawJsonMessage({ messageType: 'ConnectToLobby', payload: connectPayload });
 			};
 
 			newSocket.onmessage = (event: MessageEvent) => {
 				try {
 					if (typeof event.data !== 'string') {
-						warn(
-							'WebSocket: Received non-string message, ignoring (could be binary heartbeat).',
-							event.data
-						);
+						warn('WebSocket: Received non-string message, ignoring.', event.data);
 						return;
 					}
 
 					const message = JSON.parse(event.data) as ServerToClientMessage;
 					debug('WebSocket message received:', message);
 
+					// If we were waiting for Connect ACK and get any valid app message (not a SystemError denying connect)
 					if (state.status === ConnectionStatus.AWAITING_CONNECT_ACK) {
-						// If we receive a SystemError here, it might be due to the ConnectToLobby failing.
 						if (message.messageType === 'SystemError') {
+							const errorMsg = (message.payload as SystemErrorPayload).message;
 							logError(
 								'WebSocket Store: SystemError received while AWAITING_CONNECT_ACK:',
-								(message.payload as SystemErrorPayload).message
+								errorMsg
 							);
-							state.lastError = (message.payload as SystemErrorPayload).message;
-							setStatus(ConnectionStatus.ERROR); // Connection failed
-							state.socket?.close(4002, 'ConnectToLobby processing failed by server');
-							// attemptReconnect will be called by onclose if appropriate
-							return; // Stop processing this message further if it's an error during handshake
+							state.lastError = errorMsg;
+							setStatus(ConnectionStatus.ERROR);
+							_handleExternalPromiseRejection(errorMsg);
+							state.socket?.close(4002, 'ConnectToLobby rejected by server'); // Inform server
+							return; // Stop processing this message further
 						} else {
-							// Any other valid message means the server accepted our ConnectToLobby
+							// Any other message implies successful logical connection
 							info(
-								'WebSocket application-level connection confirmed (received first valid message post-ConnectToLobby).'
+								'WebSocket application-level connection confirmed by first valid server message.'
 							);
 							setStatus(ConnectionStatus.CONNECTED);
 							resetReconnectAttempts();
-							// startClientHeartbeat(); // Optional
+							_handleExternalPromiseResolution();
 						}
 					}
 
+					// Ensure messageType is PascalCase if that's what server sends
 					switch (message.messageType) {
-						case 'ConnectionAck': // Explicit ack from server
+						case 'ConnectionAck':
 							if (state.status !== ConnectionStatus.CONNECTED) {
 								info('ConnectionAck received. Finalizing connection.');
 								setStatus(ConnectionStatus.CONNECTED);
 								resetReconnectAttempts();
-								// startClientHeartbeat(); // Optional
+								_handleExternalPromiseResolution(); // Resolve if not already
 							}
 							lobbyStore.handleConnectionAck(message.payload as ConnectionAckPayload);
 							break;
@@ -177,118 +182,132 @@ function createWebSocketStore() {
 						case 'GlobalEvent':
 							lobbyStore.handleGlobalEvent(message.payload as GlobalEventPayload);
 							break;
-						case 'SystemError':
-							// Already handled if it occurred during AWAITING_CONNECT_ACK
-							// If it occurs later, it's a runtime error.
+						case 'SystemError': // Error during an active session
 							lobbyStore.handleSystemError(message.payload as SystemErrorPayload);
 							break;
 						case 'TwitchMessageRelay':
 							lobbyStore.handleTwitchMessageRelay(message.payload as TwitchMessageRelayPayload);
 							break;
-						case 'Pong': // If server sends explicit Pong message type
-							debug('Received Pong from server.');
-							break;
+						// case 'Pong': // Usually handled by browser, but if server sends custom Pong message
+						//  debug('Received custom Pong from server.');
+						//  break;
 						default:
-							warn(
-								`WebSocket Store: Received unhandled message type: ${(message as any).messageType}`
-							);
+							warn(`WebSocket Store: Received unhandled message type: '${message.messageType}'`);
 							notificationStore.add(
-								`Received unknown server message: ${(message as any).messageType}`,
+								`Received unknown server message type: ${message.messageType}`,
 								'warning'
 							);
 					}
 				} catch (e) {
 					warn('Failed to parse WebSocket message or handle it:', event.data, e);
-					state.lastError = 'Received malformed message from server.';
+					const parseErrorMsg = 'Received malformed message from server.';
+					state.lastError = parseErrorMsg;
 					notificationStore.add('Received unreadable message from server.', 'destructive');
+					if (state.status === ConnectionStatus.AWAITING_CONNECT_ACK) {
+						setStatus(ConnectionStatus.ERROR);
+						_handleExternalPromiseRejection(parseErrorMsg, e);
+					}
 				}
 			};
 
 			newSocket.onerror = (event: Event) => {
-				logError('WebSocket error event occurred. See onclose for status update.', event);
-				// Don't set lastError here if it was already set by a SystemError, preserve original error
+				// This event is often vague. The onclose event provides more details.
+				logError('WebSocket native error event occurred. Details should follow in onclose.', event);
 				if (!state.lastError) {
-					state.lastError = 'WebSocket connection error.';
+					// Preserve more specific error if already set
+					state.lastError = 'A WebSocket connection error occurred.';
 				}
-				// `onclose` will usually follow.
+				// Do not change status or reject promise here; onclose will handle it.
 			};
 
 			newSocket.onclose = (event: CloseEvent) => {
 				info(
-					`WebSocket connection closed. Code: ${event.code}, Reason: '${event.reason}', Clean: ${event.wasClean}`
+					`WebSocket connection closed. Code: ${event.code}, Reason: '${event.reason || 'No reason given'}', Clean: ${event.wasClean}`
 				);
 				const statusBeforeClose = state.status;
-				// stopClientHeartbeat(); // Optional
-				state.socket = null;
+				state.socket = null; // Clear the socket reference
 
+				// If disconnect was manually initiated by client, currentExternalConnectPromise should already be null or rejected.
 				if (statusBeforeClose === ConnectionStatus.DISCONNECTED) {
-					// Manually disconnected by client
-					info('WebSocket was manually disconnected.');
-					// setStatus(ConnectionStatus.DISCONNECTED) was already called.
-					resetReconnectAttempts(); // Don't reconnect if manual
+					info('WebSocket closure was due to manual disconnect. No further action.');
+					_handleExternalPromiseRejection('Manually disconnected'); // Ensure any lingering promise is rejected
+					resetReconnectAttempts(); // No reconnects on manual disconnect
 					return;
 				}
 
-				if (!state.lastError) {
-					// If no specific error message was set before closing
-					state.lastError = `Connection closed (Code: ${event.code}${event.reason ? ` - Reason: ${event.reason}` : ''})`;
-				}
+				// Determine the error message
+				const closeReasonMessage =
+					state.lastError || // Use pre-existing error if available
+					`Connection closed (Code: ${event.code}${event.reason ? ` - Reason: ${event.reason}` : ''})`;
+				state.lastError = closeReasonMessage;
 
-				// If not a clean close (1000) or if we were in a connecting/awaiting phase, try to reconnect.
-				// Also, if the server explicitly closed with a "lobby not found" or similar, we might not want to retry.
-				// For now, we retry on any non-1000 code or if closed during handshake.
-				if (
-					event.code !== 1000 ||
-					statusBeforeClose === ConnectionStatus.CONNECTING ||
-					statusBeforeClose === ConnectionStatus.AWAITING_CONNECT_ACK
-				) {
-					attemptReconnect();
+				// If the promise from connect() is still pending, reject it.
+				_handleExternalPromiseRejection(
+					closeReasonMessage,
+					new Error(`WebSocket closed with code ${event.code}: ${event.reason}`)
+				);
+
+				// Decide whether to attempt reconnection
+				// Don't reconnect for certain server-initiated close codes if they imply non-transient issues (e.g., 4xxx codes)
+				// Code 1000: Normal Closure
+				// Code 1006: Abnormal Closure (often network issue or server crash)
+				const shouldAttemptReconnect = event.code !== 1000 && event.code < 4000;
+
+				if (shouldAttemptReconnect) {
+					attemptReconnectAfterDelay();
 				} else {
-					// Clean closure (code 1000) and we were previously CONNECTED
-					if (statusBeforeClose === ConnectionStatus.CONNECTED) {
+					setStatus(ConnectionStatus.ERROR); // Or DISCONNECTED if it was a clean, expected server close (1000)
+					resetReconnectAttempts();
+					if (event.code === 1000 && statusBeforeClose === ConnectionStatus.CONNECTED) {
 						notificationStore.add('Connection cleanly closed by server.', 'info');
 					}
-					setStatus(ConnectionStatus.ERROR); // Or DISCONNECTED if it's a graceful server-side lobby end
-					state.lastError = state.lastError || 'Server closed the connection.';
-					resetReconnectAttempts();
 				}
 			};
 		} catch (err) {
 			logError('Failed to create WebSocket instance:', err);
+			const initErrorMsg = 'Failed to initialize WebSocket connection.';
 			setStatus(ConnectionStatus.ERROR);
-			state.lastError = 'Failed to initialize WebSocket connection.';
+			state.lastError = initErrorMsg;
+			_handleExternalPromiseRejection(initErrorMsg, err);
 			state.socket = null;
-			if (state.currentLobbyId) attemptReconnect();
+			// Optionally attempt reconnect even here if currentLobbyId is set, though it implies a fundamental client issue.
+			// if (state.currentLobbyId) attemptReconnectAfterDelay();
 		}
 	}
 
-	function attemptReconnect() {
+	function attemptReconnectAfterDelay() {
 		if (!state.currentLobbyId) {
-			warn('Cannot reconnect: currentLobbyId for ConnectToLobby message not available.');
-			setStatus(ConnectionStatus.ERROR);
-			state.lastError = 'Reconnection details (currentLobbyId) lost.';
+			warn(
+				'Cannot reconnect: currentLobbyId not available (likely after manual disconnect or severe error).'
+			);
+			setStatus(ConnectionStatus.ERROR); // Ensure final error state
+			state.lastError = state.lastError || 'Reconnection details lost.';
 			resetReconnectAttempts();
+			// No promise to reject here as this is part of internal retry, not initial connect()
 			return;
 		}
 
 		if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-			warn(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping.`);
+			warn(
+				`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached for lobby ${state.currentLobbyId}. Stopping.`
+			);
 			setStatus(ConnectionStatus.ERROR);
 			state.lastError = state.lastError || 'Failed to reconnect after multiple attempts.';
 			resetReconnectAttempts();
+			// No promise to reject here for the same reason
 			return;
 		}
 
 		state.reconnectAttempts++;
 		const delay = Math.min(
-			INITIAL_RECONNECT_DELAY * Math.pow(2, state.reconnectAttempts - 1),
-			MAX_RECONNECT_DELAY
+			INITIAL_RECONNECT_DELAY_MS * Math.pow(2, state.reconnectAttempts - 1),
+			MAX_RECONNECT_DELAY_MS
 		);
 
 		info(
 			`Attempting reconnect ${state.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} for lobby ${state.currentLobbyId} in ${delay / 1000}s...`
 		);
-		setStatus(ConnectionStatus.RECONNECTING);
+		setStatus(ConnectionStatus.RECONNECTING); // This status is important for UI feedback
 
 		reconnectTimeoutId = window.setTimeout(() => {
 			if (state.status === ConnectionStatus.DISCONNECTED) {
@@ -297,83 +316,104 @@ function createWebSocketStore() {
 				return;
 			}
 			if (state.currentLobbyId) {
-				_connect(state.currentLobbyId);
+				// _initiateConnectionSequence will set up its own promise handling for this specific attempt
+				// The original external promise from connect() would have already been rejected.
+				_initiateConnectionSequence(state.currentLobbyId);
 			} else {
 				warn('Reconnect aborted during timeout: currentLobbyId became null.');
 				setStatus(ConnectionStatus.ERROR);
-				state.lastError = 'Lost reconnection details during backoff (currentLobbyId).';
+				state.lastError = 'Lost reconnection details during backoff.';
 			}
 		}, delay);
 	}
 
-	// Public connect method, takes the lobbyId from createLobby response
-	function connect(lobbyId: string): void {
+	// --- Public API ---
+
+	async function connect(lobbyId: string): Promise<void> {
 		if (!lobbyId) {
-			logError('WebSocket connect called without a lobbyId.');
+			const msg = 'WebSocket connect called without a lobbyId.';
+			logError(msg);
 			notificationStore.add('Cannot connect: Lobby ID is missing.', 'destructive');
-			return;
+			return Promise.reject(new Error(msg));
 		}
 		info(`Application requested WebSocket connection for lobby: ${lobbyId}`);
-		clearTimers();
-		resetReconnectAttempts();
 
+		// If a previous connection attempt is in progress (has an unresolved promise)
+		// or if a socket is active, reject/disconnect it first.
+		if (currentExternalConnectPromise) {
+			info('New connect call while previous connection promise is pending. Rejecting previous.');
+			_handleExternalPromiseRejection('New connection attempt initiated.');
+		}
 		if (state.socket) {
-			// If there's an old socket, ensure it's fully closed
-			info('An existing WebSocket is present. Closing it before new connect.');
-			// Remove old listeners to prevent them firing on the old socket after a new connect call
-			state.socket.onopen = null;
+			info('New connect call while socket exists. Disconnecting previous.');
+			// Manual disconnect to prevent its onclose from interfering with the new attempt's logic
+			disconnectSocketInternally(1000, 'Superseded by new connect call');
+		}
+
+		clearAllTimers();
+		resetReconnectAttempts();
+		setStatus(ConnectionStatus.INITIAL); // Reset status for a fresh attempt
+
+		// Return a new promise that will be resolved/rejected by _initiateConnectionSequence's handlers
+		return new Promise<void>((resolve, reject) => {
+			currentExternalConnectPromise = { resolve, reject };
+			_initiateConnectionSequence(lobbyId);
+		});
+	}
+
+	// Internal helper to close socket without triggering reconnects from its onclose
+	function disconnectSocketInternally(code?: number, reason?: string) {
+		if (state.socket) {
+			info(`Internally closing socket. Code: ${code}, Reason: ${reason}`);
+			state.socket.onclose = null; // Prevent onclose handler
+			state.socket.onerror = null; // Prevent onerror handler
 			state.socket.onmessage = null;
-			state.socket.onerror = null;
-			state.socket.onclose = null; // Critical to prevent old onclose from triggering reconnect
-			state.socket.close(1000, 'Client initiating new connection');
+			state.socket.onopen = null;
+			state.socket.close(code, reason);
 			state.socket = null;
 		}
-		setStatus(ConnectionStatus.INITIAL); // Reset status before new attempt
-		_connect(lobbyId);
 	}
 
 	function disconnect(): void {
-		info('Application requested WebSocket disconnect.');
-		const oldStatus = state.status;
-		clearTimers();
-		resetReconnectAttempts();
+		info('Application requested WebSocket manual disconnect.');
+		_handleExternalPromiseRejection('Manually disconnected by client action.'); // Reject any pending connect() promise
+		clearAllTimers();
+		resetReconnectAttempts(); // No reconnects after manual disconnect
 
-		if (state.socket) {
-			setStatus(ConnectionStatus.DISCONNECTED); // Set status *before* closing
-			state.socket.close(1000, 'Client initiated disconnect');
-			// onclose handler will set state.socket to null
-		} else {
-			// If no socket, but status wasn't DISCONNECTED, set it now.
-			if (oldStatus !== ConnectionStatus.DISCONNECTED) {
-				setStatus(ConnectionStatus.DISCONNECTED);
-			}
-		}
-		state.currentLobbyId = null; // Clear current lobby ID on manual disconnect
+		disconnectSocketInternally(1000, 'Client initiated disconnect');
+
+		setStatus(ConnectionStatus.DISCONNECTED); // Set final status
+		state.currentLobbyId = null; // Clear lobby context
+		state.lastError = null;
 	}
 
-	// Helper to send raw JSON, used internally by _connect for ConnectToLobby
-	function sendRawJson(message: ClientToServerMessage): void {
+	// Helper for sending the initial ConnectToLobby message, ensuring socket is open.
+	function sendRawJsonMessage(message: ClientToServerMessage): void {
 		if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-			// Check open, not full CONNECTED status
 			try {
 				const messageString = JSON.stringify(message);
 				state.socket.send(messageString);
-				debug('Raw WebSocket message sent (e.g. ConnectToLobby):', message);
+				debug('Raw WebSocket message sent:', message);
 			} catch (e) {
 				logError('Failed to stringify or send raw WebSocket message:', message, e);
-				// This is critical if it fails during ConnectToLobby
-				state.lastError = 'Failed to send initial connection message.';
+				const sendErrorMsg = 'Failed to send initial connection message.';
+				state.lastError = sendErrorMsg;
 				notificationStore.add('Error sending initial message to server.', 'destructive');
 				setStatus(ConnectionStatus.ERROR);
-				state.socket?.close(4001, 'Failed to send ConnectToLobby');
+				_handleExternalPromiseRejection(sendErrorMsg, e); // Reject connect promise
+				state.socket?.close(4001, 'Failed to send ConnectToLobby message');
 			}
 		} else {
-			warn('WebSocket not open. Cannot send raw message:', message);
-			// This path should ideally not be hit for ConnectToLobby due to onopen guard
+			const notOpenMsg =
+				'WebSocket not open when trying to send raw message (e.g. ConnectToLobby).';
+			warn(notOpenMsg, 'Status:', state.status, 'ReadyState:', state.socket?.readyState);
+			state.lastError = notOpenMsg;
+			setStatus(ConnectionStatus.ERROR);
+			_handleExternalPromiseRejection(notOpenMsg); // Reject connect promise
 		}
 	}
 
-	// Public send method for general game messages, requires full CONNECTED status
+	// Public method for sending game messages after connection is established
 	function send(message: ClientToServerMessage): void {
 		if (
 			state.socket &&
@@ -388,6 +428,7 @@ function createWebSocketStore() {
 				logError('Failed to stringify or send WebSocket message:', message, e);
 				state.lastError = 'Failed to send message.';
 				notificationStore.add('Error sending message to server.', 'destructive');
+				// Optionally, handle this more gracefully, maybe set status to ERROR if send fails repeatedly
 			}
 		} else {
 			warn(

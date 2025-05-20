@@ -1,6 +1,6 @@
 import { registerGameStore } from '$lib/services/game.event.router';
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
-import type { GameSpecificCommandPayload } from '$lib/types/websocket.types';
+import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
 import type {
 	DealNoDealGameState,
 	GameEventData,
@@ -85,13 +85,19 @@ function createDealNoDealStore() {
 	}
 
 	function sendCommand(command: DealNoDealCommandData['command']): void {
-		// Command data for DND is just the command name (tag)
 		const commandData: DealNoDealCommandData = { command };
 		const payload: GameSpecificCommandPayload = {
 			game_type_id: GAME_TYPE_ID,
 			command_data: commandData
 		};
-		websocketStore.send({ message_type: 'GameSpecificCommand', payload });
+
+		// Construct the message object that conforms to ClientToServerMessage
+		const messageToSend: ClientToServerMessage = {
+			// Explicitly type it for safety
+			messageType: 'GameSpecificCommand', // Use PascalCase 'messageType'
+			payload: payload
+		};
+		websocketStore.send(messageToSend);
 	}
 
 	const actions: DealNoDealStoreActions = {

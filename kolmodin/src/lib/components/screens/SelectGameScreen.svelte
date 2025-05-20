@@ -7,94 +7,107 @@
 		CardHeader,
 		CardTitle,
 		CardDescription
-	} from '$lib/components/ui/card'; // Assuming path for Card components
+	} from '$lib/components/ui/card';
 	import { uiStore } from '$lib/stores/ui.store.svelte';
 	import { lobbyStore } from '$lib/stores/lobby.store.svelte';
-	import { websocketStore } from '$lib/stores/websocket.store.svelte';
+	import { websocketStore, ConnectionStatus } from '$lib/stores/websocket.store.svelte'; // Import ConnectionStatus
 	import { notificationStore } from '$lib/stores/notification.store.svelte';
 	import { lobbyService } from '$lib/services/lobby.service';
-	import type { AvailableGame, LobbyDetails, ApiErrorResponse } from '$lib/types/general.types';
-	import { isApiError } from '$lib/services/api.client'; // Import the type guard
+	import type { AvailableGame, LobbyDetails } from '$lib/types/general.types';
+	import { isApiError } from '$lib/services/api.client';
 	import { info, warn, error as logError } from '$lib/utils/logger';
-	import { Loader2 } from 'lucide-svelte'; // For loading spinner
+	import { Loader2 } from 'lucide-svelte';
 
 	let availableGames = $state<AvailableGame[]>([]);
 	let selectedGame = $state<AvailableGame | null>(null);
-	let twitchChannelLocalInput = $state(''); // Local state for the input field
+	let twitchChannelLocalInput = $state('');
 	let isLoadingGames = $state(true);
-	let isCreatingLobby = $state(false);
+	let isProcessingCreation = $state(false);
 
-	// Fetch available games when the component mounts
 	$effect(() => {
 		async function loadGames() {
 			info('SelectGameScreen: Fetching available games...');
-			isLoadingGames = true;
 			try {
 				availableGames = await lobbyService.fetchAvailableGames();
-				if (availableGames.length > 0) {
-					// Optionally pre-select the first game
-					// selectedGame = availableGames[0];
-				}
 			} catch (err) {
 				warn('SelectGameScreen: Failed to load available games.', err);
-				if (isApiError(err)) {
-					notificationStore.add(`Error loading games: ${err.message}`, 'destructive');
-				} else {
-					notificationStore.add('Could not fetch game list. Please try again.', 'destructive');
-				}
-				availableGames = []; // Ensure it's an empty array on error
+				notificationStore.add('Could not fetch game list. Please try again.', 'destructive');
+				availableGames = [];
 			} finally {
 				isLoadingGames = false;
 			}
 		}
-		loadGames();
+		if (isLoadingGames) loadGames();
 	});
 
 	async function handleCreateLobby(): Promise<void> {
-		if (!selectedGame) {
-			notificationStore.add('Please select a game type.', 'warning');
+		if (!selectedGame || isProcessingCreation) {
+			if (!selectedGame) notificationStore.add('Please select a game type.', 'warning');
 			return;
 		}
-		if (isCreatingLobby) return;
 
-		isCreatingLobby = true;
-		info(
-			`SelectGameScreen: Attempting to create lobby for game "${selectedGame.name}" with Twitch channel "${twitchChannelLocalInput || 'None'}".`
-		);
+		isProcessingCreation = true;
+		info(`SelectGameScreen: Creating lobby for "${selectedGame.name}"...`);
 
 		try {
-			const lobbyDetails: LobbyDetails = await lobbyService.createLobby(
+			// Step 1: Create lobby via HTTP
+			const lobbyDetailsFromApi: LobbyDetails = await lobbyService.createLobby(
 				selectedGame.id,
 				twitchChannelLocalInput.trim() || null
 			);
-			info('SelectGameScreen: Lobby created successfully via API:', lobbyDetails);
+			info('SelectGameScreen: API - Lobby created:', lobbyDetailsFromApi);
 
-			// Now connect to WebSocket
-			// The websocketStore.connect will set its status, and we can react to it.
-			// For a robust flow, we might want to await a successful connection confirmation
-			// from websocketStore before navigating, or handle connection failures gracefully.
-			// For now, we initiate connection and navigation.
-			lobbyStore.setLobbyDetails(lobbyDetails);
-			websocketStore.connect(lobbyDetails.lobby_id);
+			// Step 2: Update lobbyStore with details from API.
+			// This is still good for other parts of the app to react to lobby state.
+			lobbyStore.setLobbyDetails(lobbyDetailsFromApi);
+			notificationStore.add(
+				`Lobby for "${selectedGame.name}" created! Connecting...`,
+				'info',
+				4000
+			);
 
-			// At this point, websocketStore.state.status should be CONNECTING or CONNECTED
-			// We'll optimistically navigate. If WS connection fails, websocketStore/lobbyStore
-			// should reset UIStore.
+			// Step 3: Connect to WebSocket, awaiting the promise from websocketStore
+			await websocketStore.connect(lobbyDetailsFromApi.lobby_id);
 
-			// Important: Pass the *confirmed* subscribed Twitch channel from API to lobbyStore
-			uiStore.navigateToGameActive(lobbyDetails.game_type_id);
-			notificationStore.add(`Lobby for "${selectedGame.name}" created!`, 'success');
+			// If connect resolves, WebSocket is application-level connected.
+			info('SelectGameScreen: WebSocket connected successfully.');
+
+			// Step 4: Navigate to game screen
+			// **** USE THE DIRECT VALUE FROM lobbyDetailsFromApi ****
+			if (lobbyDetailsFromApi.game_type_created) {
+				info(
+					`SelectGameScreen: Navigating to game screen for type: ${lobbyDetailsFromApi.game_type_created}`
+				);
+				uiStore.navigateToGameActive(lobbyDetailsFromApi.game_type_created);
+			} else {
+				// This case implies an issue with the API response itself if game_type_created is missing
+				logError(
+					'SelectGameScreen: Critical - game_type_created is missing in API response. Cannot navigate.',
+					lobbyDetailsFromApi
+				);
+				notificationStore.add(
+					'Internal error: Game type missing from lobby creation response.',
+					'destructive'
+				);
+				lobbyStore.cleanupLobbyState(true); // Attempt cleanup
+			}
 		} catch (err) {
-			warn('SelectGameScreen: Failed to create lobby.', err);
-			let errorMessage = 'Failed to create lobby. Please try again.';
+			// ... (error handling remains the same) ...
+			warn('SelectGameScreen: Error during lobby creation or WebSocket connection.', err);
+			let errorMessage = 'Failed to start the game session.';
 			if (isApiError(err)) {
-				errorMessage = `Error: ${err.message}`;
+				errorMessage = `Lobby creation error: ${err.message || 'Failed to create lobby.'}`;
 			} else if (err instanceof Error) {
-				errorMessage = err.message;
+				errorMessage = `Connection error: ${err.message || 'Could not connect to game server.'}`;
 			}
 			notificationStore.add(errorMessage, 'destructive');
+
+			if (lobbyStore.state.isLobbyActive) {
+				info('SelectGameScreen (error path): Cleaning up lobby state.');
+				lobbyStore.cleanupLobbyState(true);
+			}
 		} finally {
-			isCreatingLobby = false;
+			isProcessingCreation = false;
 		}
 	}
 
@@ -103,10 +116,12 @@
 	}
 
 	function handleBack(): void {
-		uiStore.navigateToHome();
+		if (!isProcessingCreation) uiStore.navigateToHome();
 	}
 </script>
 
+// src/lib/components/screens/SelectGameScreen.svelte
+<!-- TEMPLATE REMAINS THE SAME -->
 <div class="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-4 sm:p-6 md:p-8">
 	<Card class="w-full max-w-lg">
 		<CardHeader>
@@ -139,6 +154,7 @@
 									: ''}"
 								onclick={() => handleGameSelection(game)}
 								aria-pressed={selectedGame?.id === game.id}
+								disabled={isProcessingCreation}
 							>
 								<div class="flex flex-col">
 									<span class="font-semibold">{game.name}</span>
@@ -161,7 +177,7 @@
 					type="text"
 					bind:value={twitchChannelLocalInput}
 					placeholder="your_twitch_channel_name"
-					disabled={isCreatingLobby}
+					disabled={isProcessingCreation || isLoadingGames}
 					class="w-full"
 				/>
 				<p class="text-muted-foreground mt-1 text-xs">
@@ -174,18 +190,18 @@
 					onclick={handleBack}
 					variant="outline"
 					class="w-full sm:w-auto"
-					disabled={isCreatingLobby}
+					disabled={isProcessingCreation}
 				>
 					Back
 				</Button>
 				<Button
 					onclick={handleCreateLobby}
 					class="w-full sm:flex-1"
-					disabled={!selectedGame || isLoadingGames || isCreatingLobby}
+					disabled={!selectedGame || isLoadingGames || isProcessingCreation}
 				>
-					{#if isCreatingLobby}
+					{#if isProcessingCreation}
 						<Loader2 class="mr-2 h-5 w-5 animate-spin" />
-						Creating Lobby...
+						Creating & Connecting...
 					{:else}
 						Create Lobby
 					{/if}
