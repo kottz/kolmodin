@@ -1,12 +1,7 @@
 import { registerGameStore } from '$lib/services/game.event.router';
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
 import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
-import type {
-	DealNoDealGameState,
-	GameEventData,
-	DealNoDealCommandData,
-	GamePhaseType
-} from './types';
+import type { DealNoDealGameState, GameEventData, DealNoDealCommandData } from './types';
 import { debug, warn, info } from '$lib/utils/logger';
 
 const GAME_TYPE_ID = 'DealNoDeal';
@@ -16,7 +11,6 @@ interface DealNoDealStoreActions {
 	concludeVotingAndProcess: () => void;
 }
 
-// Helper to create a default/initial state
 function createInitialDndState(): DealNoDealGameState {
 	return {
 		phase: { type: 'Setup' },
@@ -33,51 +27,115 @@ function createInitialDndState(): DealNoDealGameState {
 	};
 }
 
+type CaseVotesMapType = Record<number, string[]>; // caseIndex (0-based) -> string[] (voter_usernames)
+type PlayerVoteRecordType = Record<string, number>; // voter_username -> voted_case_index (0-based)
+
 function createDealNoDealStore() {
 	const gameState = $state<DealNoDealGameState>(createInitialDndState());
+	const caseVotesMap = $state<CaseVotesMapType>({});
+	const playerVoteRecord = $state<PlayerVoteRecordType>({});
 
-	// We can also have a piece of state for live vote feed that is not part of FullStateUpdate
-	const liveVoteFeed = $state<{ voter_username: string; vote_value: string }[]>([]);
-	const MAX_VOTE_FEED_ITEMS = 20;
+	info('DealNoDealStore: Initializing store...');
+
+	/**
+	 * Updates the local caseVotesMap based on a new vote.
+	 * Assumes the server has validated the vote (phase, case existence, etc.).
+	 * vote_value is expected to be a string representing a 1-based case number for case votes.
+	 */
+	function updateLocalVoteDisplay(voterUsername: string, voteValue: string) {
+		// Check if the voteValue is for a case (i.e., a number)
+		const newVotedCaseNumber = parseInt(voteValue, 10);
+
+		if (isNaN(newVotedCaseNumber)) {
+			// This vote is not for a case number (e.g., "DEAL", "NO_DEAL").
+			// We only update caseVotesMap for case number votes.
+			// If there was a previous case vote by this player, we should clear it.
+			const oldVotedCaseIndex = playerVoteRecord[voterUsername];
+			if (oldVotedCaseIndex !== undefined) {
+				if (caseVotesMap[oldVotedCaseIndex]) {
+					caseVotesMap[oldVotedCaseIndex] = caseVotesMap[oldVotedCaseIndex].filter(
+						(name) => name !== voterUsername
+					);
+					if (caseVotesMap[oldVotedCaseIndex].length === 0) {
+						delete caseVotesMap[oldVotedCaseIndex];
+					}
+				}
+				delete playerVoteRecord[voterUsername]; // Player is no longer voting for a specific case
+				info(
+					`DealNoDealStore: Cleared previous case vote for ${voterUsername} due to non-case vote "${voteValue}".`
+				);
+			}
+			return; // Do not process non-case votes in this map.
+		}
+
+		// Server should ensure newVotedCaseNumber is valid for the current game state.
+		// We just convert to 0-based index.
+		const newVotedCaseIndex = newVotedCaseNumber - 1;
+
+		// 1. Remove player's old vote from the map (if any)
+		const oldVotedCaseIndex = playerVoteRecord[voterUsername];
+		if (oldVotedCaseIndex !== undefined && caseVotesMap[oldVotedCaseIndex]) {
+			// Ensure oldVotedCaseIndex is not the same as newVotedCaseIndex before filtering,
+			// though the logic handles it, it's more explicit.
+			if (oldVotedCaseIndex !== newVotedCaseIndex) {
+				caseVotesMap[oldVotedCaseIndex] = caseVotesMap[oldVotedCaseIndex].filter(
+					(name) => name !== voterUsername
+				);
+				if (caseVotesMap[oldVotedCaseIndex].length === 0) {
+					delete caseVotesMap[oldVotedCaseIndex];
+				}
+			}
+		}
+
+		// 2. Add player's new vote to the map for the new case index
+		if (!caseVotesMap[newVotedCaseIndex]) {
+			caseVotesMap[newVotedCaseIndex] = [];
+		}
+		// Only add if not already there (covers case where player re-votes for same case, after old removed)
+		if (!caseVotesMap[newVotedCaseIndex].includes(voterUsername)) {
+			caseVotesMap[newVotedCaseIndex].push(voterUsername);
+		}
+
+		// 3. Update player's vote record
+		playerVoteRecord[voterUsername] = newVotedCaseIndex;
+
+		info(
+			`DealNoDealStore: caseVotesMap updated for vote by ${voterUsername} for case index ${newVotedCaseIndex}. Map:`,
+			JSON.parse(JSON.stringify(caseVotesMap))
+		);
+	}
 
 	function processEvent(eventPayload: GameEventData): void {
-		debug(`DealNoDealStore: Processing event type "${eventPayload.event_type}"`, eventPayload.data);
+		debug(
+			`DealNoDealStore: Processing event type "${eventPayload.event_type}"`,
+			JSON.parse(JSON.stringify(eventPayload.data))
+		);
 		switch (eventPayload.event_type) {
 			case 'FullStateUpdate':
-				// The server sends the complete, prepared state.
-				// Replace the client's state entirely with this.
 				Object.assign(gameState, eventPayload.data);
 				info('DealNoDealStore: Full state updated.');
-				// Clear live vote feed on full state update as tally is now included
-				liveVoteFeed.length = 0;
+				// Clear local vote display maps as FullStateUpdate contains the official tally
+				// and signals a new voting segment or phase.
+				Object.keys(caseVotesMap).forEach((key) => delete caseVotesMap[Number(key)]);
+				Object.keys(playerVoteRecord).forEach((key) => delete playerVoteRecord[key]);
+				info('DealNoDealStore: caseVotesMap and playerVoteRecord cleared due to FullStateUpdate.');
 				break;
 			case 'PlayerVoteRegistered':
-				// Add to the live feed for immediate UI feedback
-				liveVoteFeed.unshift(eventPayload.data); // Add to the beginning
-				if (liveVoteFeed.length > MAX_VOTE_FEED_ITEMS) {
-					liveVoteFeed.pop(); // Keep the list trimmed
-				}
-				// The server's FullStateUpdate will eventually include the official tally.
-				// No need to update gameState.current_vote_tally here.
+				info('DealNoDealStore: PlayerVoteRegistered event received:', eventPayload.data);
+				// The server is the source of truth for phase and validity.
+				// We only update the local display based on this event.
+				updateLocalVoteDisplay(eventPayload.data.voter_username, eventPayload.data.vote_value);
 				break;
+			// ... other cases
 			case 'CaseOpened':
-				// The server will send a FullStateUpdate after this if needed for board changes.
-				// For immediate feedback, we could update the specific case, but it risks divergence
-				// if the FullStateUpdate logic is complex.
-				// For now, rely on FullStateUpdate, but log this event.
 				info(
 					`DealNoDealStore: CaseOpened event received for case ${eventPayload.data.case_index + 1} with value ${eventPayload.data.value}`
 				);
-				// Optionally, show a temporary notification or animation based on this.
 				break;
 			case 'BankerOfferPresented':
-				// Similar to CaseOpened, the server might send FullStateUpdate.
-				// If not, and only `banker_offer` needs updating, we can do it here.
-				// The server's GamePhase::DealOrNoDeal_Voting includes the offer, so FullStateUpdate handles it.
 				info(
 					`DealNoDealStore: BankerOfferPresented event received: ${eventPayload.data.offer_amount}`
 				);
-				// gameState.banker_offer = eventPayload.data.offer_amount; // Only if FullStateUpdate doesn't cover this.
 				break;
 			default:
 				warn(`DealNoDealStore: Unhandled event type: ${(eventPayload as any).event_type}`);
@@ -85,16 +143,14 @@ function createDealNoDealStore() {
 	}
 
 	function sendCommand(command: DealNoDealCommandData['command']): void {
+		// ... (sendCommand remains the same)
 		const commandData: DealNoDealCommandData = { command };
 		const payload: GameSpecificCommandPayload = {
 			game_type_id: GAME_TYPE_ID,
 			command_data: commandData
 		};
-
-		// Construct the message object that conforms to ClientToServerMessage
 		const messageToSend: ClientToServerMessage = {
-			// Explicitly type it for safety
-			messageType: 'GameSpecificCommand', // Use PascalCase 'messageType'
+			messageType: 'GameSpecificCommand',
 			payload: payload
 		};
 		websocketStore.send(messageToSend);
@@ -109,12 +165,10 @@ function createDealNoDealStore() {
 
 	return {
 		get gameState() {
-			// Expose the main game state
 			return gameState;
 		},
-		get liveVoteFeed() {
-			// Expose the live vote feed
-			return liveVoteFeed;
+		get caseVotesMap() {
+			return caseVotesMap;
 		},
 		actions
 	};

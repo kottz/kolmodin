@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { dealNoDealStore } from './store.svelte';
+	import { dealNoDealStore } from './store.svelte'; // Adjust path if necessary
 	import { Button } from '$lib/components/ui/button';
 	import {
 		Card,
@@ -12,14 +12,13 @@
 	import BriefcaseGrid from './components/BriefcaseGrid.svelte';
 
 	const dndState = $derived(dealNoDealStore.gameState);
-	const currentPhaseType = $derived(dealNoDealStore.gameState.phase.type);
+	const currentPhaseType = $derived(dndState.phase.type);
 
 	const moneyBoardColumns = $derived(() => {
 		const sortedValues = [...(dndState.briefcase_values || [])].sort((a, b) => a - b);
 		if (sortedValues.length === 0) {
 			return { left: [], right: [] };
 		}
-
 		const midpoint = Math.ceil(sortedValues.length / 2);
 		const left = sortedValues.slice(0, midpoint);
 		const right = sortedValues.slice(midpoint);
@@ -35,14 +34,13 @@
 
 	function handleLeaveGame() {
 		info('Leave Game button clicked');
-		// Example: window.location.href = '/lobby';
 	}
 
 	info('DealNoDeal AdminView script executed.');
 </script>
 
-<div class="relative min-h-screen bg-background p-4 md:p-6">
-	<div class="absolute left-4 top-4 md:left-6 md:top-6">
+<div class="bg-background relative min-h-screen p-4 md:p-6">
+	<div class="absolute top-4 left-4 md:top-6 md:left-6">
 		<Button variant="outline" onclick={handleLeaveGame}>Leave Game</Button>
 	</div>
 
@@ -74,9 +72,9 @@
 						{dndState.cases_to_open_this_round_target} | Opened This Round:
 						{dndState.cases_opened_in_current_round_segment}
 					</p>
-					{#if currentAdminPanelOffer !== null}
+					{#if currentAdminPanelOffer() !== null}
 						<p class="text-lg font-semibold text-green-600 dark:text-green-400">
-							Banker Offer: ${currentAdminPanelOffer.toLocaleString()}
+							Banker Offer: ${currentAdminPanelOffer()}
 						</p>
 					{/if}
 				{/if}
@@ -88,12 +86,7 @@
 				<Card class="lg:col-span-2">
 					<CardHeader><CardTitle>Briefcases</CardTitle></CardHeader>
 					<CardContent>
-						<BriefcaseGrid
-							values={dndState.briefcase_values || []}
-							isOpenedStates={dndState.briefcase_is_opened || []}
-							playerChosenIndex={dndState.player_chosen_case_index}
-							phaseType={currentPhaseType}
-						/>
+						<BriefcaseGrid />
 					</CardContent>
 				</Card>
 
