@@ -2,6 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { uiStore } from '$lib/stores/ui.store.svelte';
 	import { info } from '$lib/utils/logger';
+	import LightSwitch from '$lib/components/ui/LightSwitch.svelte';
 
 	function handleCreateLobbyClick(): void {
 		info('HomeScreen: "Create New Lobby" clicked.');
@@ -11,6 +12,7 @@
 
 <div class="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-4 sm:p-6 md:p-8">
 	<div class="w-full max-w-md space-y-8 text-center">
+		<LightSwitch />
 		<div>
 			<!-- You can add a logo or app icon here if you have one -->
 			<!-- <img class="mx-auto h-12 w-auto" src="/path/to/your/logo.svg" alt="App Logo" /> -->

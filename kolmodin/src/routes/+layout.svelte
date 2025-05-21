@@ -1,6 +1,6 @@
 <script lang="ts">
-	// import { ModeWatcher } from 'mode-watcher'; // If you use mode-watcher
 	import '../app.css'; // Import global styles and Tailwind
+	import { ModeWatcher } from 'mode-watcher'; // If you use mode-watcher
 	import NotificationList from '$lib/components/global/NotificationList.svelte';
 	import WebsocketDisconnectOverlay from '$lib/components/global/WebsocketDisconnectOverlay.svelte';
 	import { PUBLIC_APP_TITLE } from '$env/static/public'; // For browser tab title
@@ -15,7 +15,7 @@
 </svelte:head>
 
 <!-- If using mode-watcher for dark/light mode -->
-<!-- <ModeWatcher defaultMode={'system'} /> -->
+<ModeWatcher defaultMode={'dark'} />
 
 <NotificationList />
 <WebsocketDisconnectOverlay />
