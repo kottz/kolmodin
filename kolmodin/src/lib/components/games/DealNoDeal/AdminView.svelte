@@ -5,13 +5,16 @@
 		Card,
 		CardContent,
 		CardHeader,
-		CardTitle,
-		CardDescription
+		CardTitle
+		// CardDescription component is no longer used in this specific file after changes
 	} from '$lib/components/ui/card';
 	import BriefcaseGrid from './components/BriefcaseGrid.svelte';
 
 	const dndState = $derived(dealNoDealStore.gameState);
-	const currentPhaseType = $derived(dndState.phase.type);
+	// currentPhaseType is used for the fallback message in the Player Information Card
+	//const currentPhaseType = $derived(dndState.phase.type);
+	const currentPhaseType = $derived(dealNoDealStore.gameState.phase.type);
+	const caseVotesMapFromStore = $derived(dealNoDealStore.caseVotesMap);
 
 	const moneyBoardColumns = $derived(() => {
 		const sortedValues = [...(dndState.briefcase_values || [])].sort((a, b) => a - b);
@@ -24,16 +27,47 @@
 		return { left, right };
 	});
 
-	const currentAdminPanelOffer = $derived(() => {
-		if (dndState.phase.type === 'DealOrNoDeal_Voting') {
-			return dndState.phase.offer;
-		}
-		return dndState.banker_offer;
-	});
+	// The currentAdminPanelOffer derived state is no longer needed as this info
+	// is now displayed in the new Player Information Card or not at all in the admin panel.
 </script>
 
 <div class="bg-background relative min-h-screen">
-	<div class="mx-auto mt-6">
+	<div class="mx-auto mt-6 px-4 sm:px-6 lg:px-8">
+		<!-- Player Information Card -->
+		<div class="mb-6">
+			<Card>
+				<CardContent class="p-8 text-center">
+					<p>{JSON.stringify(dndState.phase, null, 4)}</p>
+					{#if dndState.phase.type === 'Setup'}
+						<h2 class="text-4xl font-bold">Waiting to start the game</h2>
+					{:else if dndState.phase.type === 'PlayerCaseSelection_Voting'}
+						<h2 class="text-4xl font-bold">Vote for your briefcase</h2>
+					{:else if dndState.phase.type === 'RoundCaseOpening_Voting'}
+						<h2 class="text-3xl font-bold">
+							{dndState.phase.data.opened_so_far_for_round} / {dndState.phase.data.total_to_open_for_round} cases opened this round
+						</h2>
+					{:else if dndState.phase.type === 'BankerOfferCalculation'}
+						<h2 class="text-3xl font-bold text-muted-foreground">Banker is calculating the offer...</h2>
+					{:else if dndState.phase.type === 'DealOrNoDeal_Voting'}
+						<h2 class="text-4xl font-bold">
+							Banker offers ${dndState.phase.data.offer}. Deal or No Deal?
+						</h2>
+						<p>
+							deal: {caseVotesMapFromStore['DEAL']?.length} / no deal: {caseVotesMapFromStore['NO_DEAL']?.length}
+						</p>
+						<p>{JSON.stringify(caseVotesMapFromStore, null, 4)}</p>
+					{:else if dndState.phase.type === 'GameOver'}
+						<h2 class="text-4xl font-bold">
+							Game Over. {#if dndState.phase.winnings > 0}You won ${dndState.phase.winnings.toLocaleString()}!{:else}Better luck next time!{/if}
+						</h2>
+					{:else}
+						<!-- Fallback for any other phase -->
+						<h2 class="text-2xl font-bold">Loading game state... ({currentPhaseType})</h2>
+					{/if}
+				</CardContent>
+			</Card>
+		</div>
+
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
 			<!-- Left Column -->
 			<div class="space-y-6 lg:col-span-1">
@@ -87,10 +121,8 @@
 				<!-- Admin Panel Card -->
 				<Card>
 					<CardHeader>
-						<CardTitle>Deal or No Deal - Admin Panel</CardTitle>
-						<CardDescription>
-							Phase: <span class="text-primary font-semibold">{currentPhaseType}</span>
-						</CardDescription>
+						<CardTitle>Admin Controls</CardTitle>
+						<!-- CardDescription with Phase info removed as per request -->
 					</CardHeader>
 					<CardContent class="space-y-4">
 						<div class="flex flex-wrap gap-2">
@@ -105,19 +137,7 @@
 								Conclude Voting & Process
 							</Button>
 						</div>
-
-						{#if dndState.phase.type !== 'Setup' && dndState.phase.type !== 'GameOver'}
-							<p class="text-muted-foreground text-sm">
-								Round: {dndState.current_round_display_number} | Cases to Open:
-								{dndState.cases_to_open_this_round_target} | Opened This Round:
-								{dndState.cases_opened_in_current_round_segment}
-							</p>
-							{#if currentAdminPanelOffer() !== null}
-								<p class="text-lg font-semibold text-green-600 dark:text-green-400">
-									Banker Offer: ${currentAdminPanelOffer()}
-								</p>
-							{/if}
-						{/if}
+						<!-- Detailed game state info (round, cases to open, banker offer) removed from here -->
 					</CardContent>
 				</Card>
 			</div>

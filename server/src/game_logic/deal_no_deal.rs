@@ -50,6 +50,7 @@ pub enum GameEvent {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", content = "data")]
 pub enum GamePhase {
     Setup,
     PlayerCaseSelection_Voting,

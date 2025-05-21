@@ -114,6 +114,7 @@ function createDealNoDealStore() {
 			case 'FullStateUpdate':
 				Object.assign(gameState, eventPayload.data);
 				info('DealNoDealStore: Full state updated.');
+				info(eventPayload.data);
 				// Clear local vote display maps as FullStateUpdate contains the official tally
 				// and signals a new voting segment or phase.
 				Object.keys(caseVotesMap).forEach((key) => delete caseVotesMap[Number(key)]);
