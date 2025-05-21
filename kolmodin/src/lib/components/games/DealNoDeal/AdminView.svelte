@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { dealNoDealStore } from './store.svelte';
-	import { Button } from '$lib/components/ui/button'; // Corrected path
+	import { Button } from '$lib/components/ui/button';
 	import {
 		Card,
 		CardContent,
@@ -8,168 +8,141 @@
 		CardTitle,
 		CardDescription
 	} from '$lib/components/ui/card';
-	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { info } from '$lib/utils/logger';
+	import BriefcaseGrid from './components/BriefcaseGrid.svelte';
 
 	const dndState = $derived(dealNoDealStore.gameState);
-	const liveVotes = $derived(dealNoDealStore.liveVoteFeed);
-	const sortedCases = $derived(dealNoDealStore.gameState.briefcase_values.sort().reverse());
-	const currentPhase = $derived(dealNoDealStore.gameState.phase.type);
-	const isVotingPhase = $derived(
-		() =>
-			dealNoDealStore.gameState.phase === 'PlayerCaseSelection_Voting' ||
-			dealNoDealStore.gameState.phase === 'RoundCaseOpening_Voting' ||
-			dealNoDealStore.gameState.phase === 'DealOrNoDeal_Voting'
-	);
+	const currentPhaseType = $derived(dealNoDealStore.gameState.phase.type);
 
-	let rawStateForDebug = $derived(JSON.stringify(dndState, null, 2));
+	const moneyBoardColumns = $derived(() => {
+		const sortedValues = [...(dndState.briefcase_values || [])].sort((a, b) => a - b);
+		if (sortedValues.length === 0) {
+			return { left: [], right: [] };
+		}
 
-	info('DealNoDeal AdminView script executed (runs once on component init).');
+		const midpoint = Math.ceil(sortedValues.length / 2);
+		const left = sortedValues.slice(0, midpoint);
+		const right = sortedValues.slice(midpoint);
+		return { left, right };
+	});
+
+	const currentAdminPanelOffer = $derived(() => {
+		if (dndState.phase.type === 'DealOrNoDeal_Voting') {
+			return dndState.phase.offer;
+		}
+		return dndState.banker_offer;
+	});
+
+	function handleLeaveGame() {
+		info('Leave Game button clicked');
+		// Example: window.location.href = '/lobby';
+	}
+
+	info('DealNoDeal AdminView script executed.');
 </script>
 
-<div class="space-y-6">
-	<Card>
-		<CardHeader>
-			<CardTitle>Deal or No Deal - Admin Panel</CardTitle>
-			<CardDescription>
-				Phase: <span class="text-primary font-semibold">{currentPhase}</span>
-			</CardDescription>
-		</CardHeader>
-		<CardContent class="space-y-4">
-			<div class="flex space-x-2">
-				<!-- Use onclick for Svelte 5 event handling on components -->
-				<Button onclick={dealNoDealStore.actions.startGame}>
-					{#if dndState.phase.type === 'GameOver'}Restart Game{:else}Start Game{/if}
-				</Button>
-				<Button onclick={dealNoDealStore.actions.concludeVotingAndProcess} variant="secondary">
-					Conclude Voting & Process
-				</Button>
-			</div>
+<div class="relative min-h-screen bg-background p-4 md:p-6">
+	<div class="absolute left-4 top-4 md:left-6 md:top-6">
+		<Button variant="outline" onclick={handleLeaveGame}>Leave Game</Button>
+	</div>
 
-			{#if dndState.phase.type !== 'Setup' && dndState.phase.type !== 'GameOver'}
-				<p class="text-muted-foreground text-sm">
-					Round: {dndState.current_round_display_number} | Cases to Open this Round: {dndState.cases_to_open_this_round_target}
-					| Opened in Segment: {dndState.cases_opened_in_current_round_segment}
-				</p>
-				{#if dndState.banker_offer !== null && dndState.phase.type !== 'DealOrNoDeal_Voting'}
-					<p class="text-lg font-semibold text-green-500">
-						Current Banker Offer: ${dndState.banker_offer.toLocaleString()}
+	<div class="mx-auto max-w-6xl space-y-6 pt-16 md:pt-20">
+		<Card>
+			<CardHeader>
+				<CardTitle>Deal or No Deal - Admin Panel</CardTitle>
+				<CardDescription>
+					Phase: <span class="text-primary font-semibold">{currentPhaseType}</span>
+				</CardDescription>
+			</CardHeader>
+			<CardContent class="space-y-4">
+				<div class="flex flex-wrap gap-2">
+					<Button onclick={dealNoDealStore.actions.startGame} size="sm">
+						{#if dndState.phase.type === 'GameOver'}Restart Game{:else}Start Game{/if}
+					</Button>
+					<Button
+						onclick={dealNoDealStore.actions.concludeVotingAndProcess}
+						variant="secondary"
+						size="sm"
+					>
+						Conclude Voting & Process
+					</Button>
+				</div>
+
+				{#if dndState.phase.type !== 'Setup' && dndState.phase.type !== 'GameOver'}
+					<p class="text-muted-foreground text-sm">
+						Round: {dndState.current_round_display_number} | Cases to Open:
+						{dndState.cases_to_open_this_round_target} | Opened This Round:
+						{dndState.cases_opened_in_current_round_segment}
 					</p>
-				{/if}
-			{/if}
-		</CardContent>
-	</Card>
-
-	{#if dndState.phase.type !== 'Setup'}
-		<div class="grid grid-cols-1 gap-6 md:grid-cols-3">
-			<Card class="md:col-span-2">
-				<CardHeader><CardTitle>Briefcases</CardTitle></CardHeader>
-				<CardContent>
-					{#if dndState.briefcase_values.length > 0}
-						<div class="grid grid-cols-12 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7">
-							{#each { length: dndState.briefcase_values.length } as _, i (i)}
-								{@const caseIndex = i}
-								<!-- Ensure dndState properties are accessed safely, especially array indices -->
-								{@const isOpened = dndState.briefcase_is_opened?.[caseIndex]}
-								{@const value = dndState.briefcase_values?.[caseIndex]}
-								{@const isPlayerCase = dndState.player_chosen_case_index === caseIndex}
-								<div
-									class="flex aspect-square flex-col items-center justify-center rounded border p-1 text-center text-xs shadow sm:p-2 sm:text-sm
-                                    {isOpened
-										? 'bg-muted text-muted-foreground line-through'
-										: 'bg-background hover:bg-accent cursor-default'}
-                                    {isPlayerCase && !isOpened
-										? 'border-primary border-2 font-semibold'
-										: 'border-border'}
-                                    {isPlayerCase && isOpened && dndState.phase.type === 'GameOver'
-										? 'border-2 border-amber-500 font-semibold'
-										: ''}"
-									title={isPlayerCase && !isOpened
-										? "Player's Case"
-										: isOpened
-											? `Opened: $${value?.toLocaleString() ?? 'N/A'}`
-											: `Case #${caseIndex + 1}`}
-								>
-									<span class="font-bold">#{caseIndex + 1}</span>
-									{#if isOpened && value !== undefined}
-										<span class="mt-0.5 text-[0.6rem] sm:text-xs">${value.toLocaleString()}</span>
-									{/if}
-									{#if isPlayerCase && !isOpened}
-										<span class="mt-0.5 text-[0.6rem] sm:text-xs">(Your Pick)</span>
-									{/if}
-								</div>
-							{/each}
-						</div>
-					{:else}
-						<p class="text-muted-foreground">Briefcases not yet initialized.</p>
+					{#if currentAdminPanelOffer !== null}
+						<p class="text-lg font-semibold text-green-600 dark:text-green-400">
+							Banker Offer: ${currentAdminPanelOffer.toLocaleString()}
+						</p>
 					{/if}
-				</CardContent>
-			</Card>
+				{/if}
+			</CardContent>
+		</Card>
 
-			<div class="space-y-6">
-				<Card>
-					<CardHeader><CardTitle>Money Board</CardTitle></CardHeader>
+		{#if dndState.phase.type !== 'Setup'}
+			<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+				<Card class="lg:col-span-2">
+					<CardHeader><CardTitle>Briefcases</CardTitle></CardHeader>
 					<CardContent>
-						<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-							{#each dndState.briefcase_values as moneyValue (moneyValue)}
-								<!-- Corrected class_name to class -->
-								<div
-									class={!dndState.remaining_money_values_in_play?.includes(moneyValue)
-										? 'text-muted-foreground line-through'
-										: moneyValue >= 100000
-											? 'text-primary font-semibold'
-											: ''}
-								>
-									${moneyValue.toLocaleString()}
-								</div>
-							{/each}
-						</div>
+						<BriefcaseGrid
+							values={dndState.briefcase_values || []}
+							isOpenedStates={dndState.briefcase_is_opened || []}
+							playerChosenIndex={dndState.player_chosen_case_index}
+							phaseType={currentPhaseType}
+						/>
 					</CardContent>
 				</Card>
 
-				{#if isVotingPhase}
+				<div class="space-y-6 lg:col-span-1">
 					<Card>
-						<CardHeader><CardTitle>Vote Status</CardTitle></CardHeader>
+						<CardHeader><CardTitle>Money Board</CardTitle></CardHeader>
 						<CardContent>
-							<h4 class="mb-1 text-sm font-medium">Current Vote Tally:</h4>
-							{#if dndState.current_vote_tally && Object.keys(dndState.current_vote_tally).length > 0}
-								<ul class="mb-3 list-disc pl-5 text-sm">
-									{#each Object.entries(dndState.current_vote_tally) as [vote, count] (vote)}
-										<li>{vote}: {count}</li>
-									{/each}
-								</ul>
+							{#if moneyBoardColumns().left.length > 0}
+								<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs sm:text-sm">
+									<div class="flex flex-col space-y-1.5">
+										{#each moneyBoardColumns().left as moneyValue (moneyValue)}
+											{@const isActive =
+												dndState.remaining_money_values_in_play?.includes(moneyValue)}
+											<div
+												class="rounded px-2 py-1.5 text-center font-medium shadow-sm
+                                               {isActive
+													? moneyValue >= 100000
+														? 'bg-red-500 text-white dark:bg-red-600'
+														: 'bg-blue-500 text-white dark:bg-blue-600'
+													: 'bg-muted text-muted-foreground line-through opacity-60 dark:bg-neutral-700 dark:text-neutral-400'}"
+											>
+												${moneyValue.toLocaleString()}
+											</div>
+										{/each}
+									</div>
+									<div class="flex flex-col space-y-1.5">
+										{#each moneyBoardColumns().right as moneyValue (moneyValue)}
+											{@const isActive =
+												dndState.remaining_money_values_in_play?.includes(moneyValue)}
+											<div
+												class="rounded px-2 py-1.5 text-center font-medium shadow-sm
+                                               {isActive
+													? moneyValue >= 100000
+														? 'bg-red-500 text-white dark:bg-red-600'
+														: 'bg-blue-500 text-white dark:bg-blue-600'
+													: 'bg-muted text-muted-foreground line-through opacity-60 dark:bg-neutral-700 dark:text-neutral-400'}"
+											>
+												${moneyValue.toLocaleString()}
+											</div>
+										{/each}
+									</div>
+								</div>
 							{:else}
-								<p class="text-muted-foreground mb-3 text-sm">Awaiting votes...</p>
-							{/if}
-
-							<h4 class="mb-1 text-sm font-medium">Live Vote Feed (Last {liveVotes.length}):</h4>
-							{#if liveVotes.length > 0}
-								<ScrollArea class="h-32 rounded-md border p-2 text-xs">
-									{#each liveVotes as vote (vote.voter_username + vote.vote_value + Math.random())}
-										<p>
-											<span class="font-semibold">{vote.voter_username}:</span>
-											{vote.vote_value}
-										</p>
-									{/each}
-								</ScrollArea>
-							{:else}
-								<p class="text-muted-foreground text-xs">
-									No live votes received yet for this segment.
-								</p>
+								<p class="text-muted-foreground">Money values not yet available.</p>
 							{/if}
 						</CardContent>
 					</Card>
-				{/if}
+				</div>
 			</div>
-		</div>
-	{/if}
-
-	<details class="mt-6">
-		<summary class="text-muted-foreground cursor-pointer text-sm"
-			>Show Raw Game State (Debug)</summary
-		>
-		<ScrollArea class="bg-muted mt-2 max-h-96 overflow-x-auto rounded p-3 text-xs">
-			<pre>{rawStateForDebug}</pre>
-		</ScrollArea>
-	</details>
+		{/if}
+	</div>
 </div>
