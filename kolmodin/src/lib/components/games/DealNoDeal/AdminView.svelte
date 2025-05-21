@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { dealNoDealStore } from './store.svelte'; // Adjust path if necessary
+	import { dealNoDealStore } from './store.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		Card,
@@ -8,7 +8,6 @@
 		CardTitle,
 		CardDescription
 	} from '$lib/components/ui/card';
-	import { info } from '$lib/utils/logger';
 	import BriefcaseGrid from './components/BriefcaseGrid.svelte';
 
 	const dndState = $derived(dealNoDealStore.gameState);
@@ -33,66 +32,25 @@
 	});
 </script>
 
-<div class="bg-background relative min-h-screen p-4 md:p-6">
-	<div class="mx-auto max-w-6xl space-y-6 pt-16 md:pt-20">
-		<Card>
-			<CardHeader>
-				<CardTitle>Deal or No Deal - Admin Panel</CardTitle>
-				<CardDescription>
-					Phase: <span class="text-primary font-semibold">{currentPhaseType}</span>
-				</CardDescription>
-			</CardHeader>
-			<CardContent class="space-y-4">
-				<div class="flex flex-wrap gap-2">
-					<Button onclick={dealNoDealStore.actions.startGame} size="sm">
-						{#if dndState.phase.type === 'GameOver'}Restart Game{:else}Start Game{/if}
-					</Button>
-					<Button
-						onclick={dealNoDealStore.actions.concludeVotingAndProcess}
-						variant="secondary"
-						size="sm"
-					>
-						Conclude Voting & Process
-					</Button>
-				</div>
-
-				{#if dndState.phase.type !== 'Setup' && dndState.phase.type !== 'GameOver'}
-					<p class="text-muted-foreground text-sm">
-						Round: {dndState.current_round_display_number} | Cases to Open:
-						{dndState.cases_to_open_this_round_target} | Opened This Round:
-						{dndState.cases_opened_in_current_round_segment}
-					</p>
-					{#if currentAdminPanelOffer() !== null}
-						<p class="text-lg font-semibold text-green-600 dark:text-green-400">
-							Banker Offer: ${currentAdminPanelOffer()}
-						</p>
-					{/if}
-				{/if}
-			</CardContent>
-		</Card>
-
-		{#if dndState.phase.type !== 'Setup'}
-			<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-				<Card class="lg:col-span-2">
-					<CardHeader><CardTitle>Briefcases</CardTitle></CardHeader>
-					<CardContent>
-						<BriefcaseGrid />
-					</CardContent>
-				</Card>
-
-				<div class="space-y-6 lg:col-span-1">
+<div class="bg-background relative min-h-screen">
+	<div class="mx-auto mt-6">
+		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+			<!-- Left Column -->
+			<div class="space-y-6 lg:col-span-1">
+				<!-- Money Board Card (conditionally rendered) -->
+				{#if dndState.phase.type !== 'Setup'}
 					<Card>
 						<CardHeader><CardTitle>Money Board</CardTitle></CardHeader>
 						<CardContent>
 							{#if moneyBoardColumns().left.length > 0}
-								<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs sm:text-sm">
+								<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xl sm:text-xl">
 									<div class="flex flex-col space-y-1.5">
 										{#each moneyBoardColumns().left as moneyValue (moneyValue)}
 											{@const isActive =
 												dndState.remaining_money_values_in_play?.includes(moneyValue)}
 											<div
 												class="rounded px-2 py-1.5 text-center font-medium shadow-sm
-                                               {isActive
+                                                   {isActive
 													? moneyValue >= 100000
 														? 'bg-red-500 text-white dark:bg-red-600'
 														: 'bg-blue-500 text-white dark:bg-blue-600'
@@ -108,7 +66,7 @@
 												dndState.remaining_money_values_in_play?.includes(moneyValue)}
 											<div
 												class="rounded px-2 py-1.5 text-center font-medium shadow-sm
-                                               {isActive
+                                                   {isActive
 													? moneyValue >= 100000
 														? 'bg-red-500 text-white dark:bg-red-600'
 														: 'bg-blue-500 text-white dark:bg-blue-600'
@@ -124,8 +82,58 @@
 							{/if}
 						</CardContent>
 					</Card>
-				</div>
+				{/if}
+
+				<!-- Admin Panel Card -->
+				<Card>
+					<CardHeader>
+						<CardTitle>Deal or No Deal - Admin Panel</CardTitle>
+						<CardDescription>
+							Phase: <span class="text-primary font-semibold">{currentPhaseType}</span>
+						</CardDescription>
+					</CardHeader>
+					<CardContent class="space-y-4">
+						<div class="flex flex-wrap gap-2">
+							<Button onclick={dealNoDealStore.actions.startGame} size="sm">
+								{#if dndState.phase.type === 'GameOver'}Restart Game{:else}Start Game{/if}
+							</Button>
+							<Button
+								onclick={dealNoDealStore.actions.concludeVotingAndProcess}
+								variant="secondary"
+								size="sm"
+							>
+								Conclude Voting & Process
+							</Button>
+						</div>
+
+						{#if dndState.phase.type !== 'Setup' && dndState.phase.type !== 'GameOver'}
+							<p class="text-muted-foreground text-sm">
+								Round: {dndState.current_round_display_number} | Cases to Open:
+								{dndState.cases_to_open_this_round_target} | Opened This Round:
+								{dndState.cases_opened_in_current_round_segment}
+							</p>
+							{#if currentAdminPanelOffer() !== null}
+								<p class="text-lg font-semibold text-green-600 dark:text-green-400">
+									Banker Offer: ${currentAdminPanelOffer()}
+								</p>
+							{/if}
+						{/if}
+					</CardContent>
+				</Card>
 			</div>
-		{/if}
+
+			<!-- Right Column -->
+			<div class="lg:col-span-2">
+				<!-- Briefcases Card (conditionally rendered) -->
+				{#if dndState.phase.type !== 'Setup'}
+					<Card>
+						<CardHeader><CardTitle>Briefcases</CardTitle></CardHeader>
+						<CardContent>
+							<BriefcaseGrid />
+						</CardContent>
+					</Card>
+				{/if}
+			</div>
+		</div>
 	</div>
 </div>

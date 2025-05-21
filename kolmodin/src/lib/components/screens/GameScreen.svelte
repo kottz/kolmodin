@@ -73,7 +73,7 @@
 		</div>
 	</header>
 
-	<div class="container mx-auto flex-1 overflow-y-auto p-4 md:p-6">
+	<div class="container mx-auto flex-1 overflow-y-auto">
 		{#if ActiveGameComponent}
 			<!-- Correct Svelte 5 dynamic component rendering -->
 			<ActiveGameComponent />

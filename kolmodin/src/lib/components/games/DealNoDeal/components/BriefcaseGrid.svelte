@@ -14,7 +14,7 @@
 </script>
 
 {#if values.length > 0}
-	<div class="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-9">
+	<div class="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-5 lg:grid-cols-5 xl:grid-cols-5">
 		{#each { length: values.length } as _, i (i)}
 			{@const caseIndex = i}
 			{@const isOpened = isOpenedStates?.[caseIndex]}
