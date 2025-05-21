@@ -31,19 +31,9 @@
 		}
 		return dndState.banker_offer;
 	});
-
-	function handleLeaveGame() {
-		info('Leave Game button clicked');
-	}
-
-	info('DealNoDeal AdminView script executed.');
 </script>
 
 <div class="bg-background relative min-h-screen p-4 md:p-6">
-	<div class="absolute top-4 left-4 md:top-6 md:left-6">
-		<Button variant="outline" onclick={handleLeaveGame}>Leave Game</Button>
-	</div>
-
 	<div class="mx-auto max-w-6xl space-y-6 pt-16 md:pt-20">
 		<Card>
 			<CardHeader>
