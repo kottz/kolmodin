@@ -9,34 +9,34 @@ export type GamePhaseType =
 	| { type: 'Setup' }
 	| { type: 'PlayerCaseSelection_Voting' }
 	| {
-		type: 'RoundCaseOpening_Voting';
-		data: {
-			round_number: number; // u8
-			total_to_open_for_round: number; // u8
-			opened_so_far_for_round: number; // u8
-		};
-	}
+			type: 'RoundCaseOpening_Voting';
+			data: {
+				round_number: number; // u8
+				total_to_open_for_round: number; // u8
+				opened_so_far_for_round: number; // u8
+			};
+	  }
 	| {
-		type: 'BankerOfferCalculation';
-		data: {
-			round_number: number; // u8
-		};
-	}
+			type: 'BankerOfferCalculation';
+			data: {
+				round_number: number; // u8
+			};
+	  }
 	| {
-		type: 'DealOrNoDeal_Voting';
-		data: {
-			round_number: number; // u8
-			offer: number; // u64
-		};
-	}
+			type: 'DealOrNoDeal_Voting';
+			data: {
+				round_number: number; // u8
+				offer: number; // u64
+			};
+	  }
 	| {
-		type: 'GameOver';
-		data: {
-			summary: string;
-			winnings: number; // u64
-			player_case_original_value: number; //u64
-		};
-	};
+			type: 'GameOver';
+			data: {
+				summary: string;
+				winnings: number; // u64
+				player_case_original_value: number; //u64
+			};
+	  };
 
 // DealNoDealGame struct from server (client-side representation)
 // This is what we receive in FullStateUpdate
@@ -60,26 +60,26 @@ export interface DealNoDealGameState {
 export type GameEventData =
 	| { event_type: 'FullStateUpdate'; data: DealNoDealGameState }
 	| {
-		event_type: 'PlayerVoteRegistered';
-		data: {
-			voter_username: string;
-			vote_value: string; // This is the raw vote (e.g., "15", "DEAL")
-		};
-	}
+			event_type: 'PlayerVoteRegistered';
+			data: {
+				voter_username: string;
+				vote_value: string; // This is the raw vote (e.g., "15", "DEAL")
+			};
+	  }
 	| {
-		event_type: 'CaseOpened';
-		data: {
-			case_index: number; // usize
-			value: number; // u64
-			is_player_case_reveal_at_end: boolean;
-		};
-	}
+			event_type: 'CaseOpened';
+			data: {
+				case_index: number; // usize
+				value: number; // u64
+				is_player_case_reveal_at_end: boolean;
+			};
+	  }
 	| {
-		event_type: 'BankerOfferPresented';
-		data: {
-			offer_amount: number; // u64
-		};
-	};
+			event_type: 'BankerOfferPresented';
+			data: {
+				offer_amount: number; // u64
+			};
+	  };
 
 // Type for the command_data part of GameSpecificCommandPayload when game_type_id is 'DealNoDeal'
 // This directly matches the AdminCommand enum on the server (just the tag).

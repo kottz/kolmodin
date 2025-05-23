@@ -30,26 +30,44 @@ function createInitialDndState(): DealNoDealGameState {
 type CaseVotesMapType = Record<number, string[]>; // caseIndex (0-based) -> string[] (voter_usernames)
 type PlayerVoteRecordType = Record<string, number>; // voter_username -> voted_case_index (0-based)
 
+// Updated type for deal/no deal votes
+type DealNoDealVoteOption = 'DEAL' | 'NO DEAL';
+type DealNoDealVotesMapType = {
+	DEAL: string[]; // Array of usernames who voted DEAL
+	'NO DEAL': string[]; // Array of usernames who voted NO DEAL
+};
+
 function createDealNoDealStore() {
 	const gameState = $state<DealNoDealGameState>(createInitialDndState());
 	const caseVotesMap = $state<CaseVotesMapType>({});
 	const playerVoteRecord = $state<PlayerVoteRecordType>({});
+	// Initialize with empty arrays for DEAL and NO DEAL
+	const dealNoDealVotesMap = $state<DealNoDealVotesMapType>({ DEAL: [], 'NO DEAL': [] });
 
 	info('DealNoDealStore: Initializing store...');
 
-	/**
-	 * Updates the local caseVotesMap based on a new vote.
-	 * Assumes the server has validated the vote (phase, case existence, etc.).
-	 * vote_value is expected to be a string representing a 1-based case number for case votes.
-	 */
+	function removeUserFromDealNoDealLists(username: string) {
+		let changed = false;
+		const dealIndex = dealNoDealVotesMap['DEAL'].indexOf(username);
+		if (dealIndex > -1) {
+			dealNoDealVotesMap['DEAL'].splice(dealIndex, 1);
+			changed = true;
+		}
+		const noDealIndex = dealNoDealVotesMap['NO DEAL'].indexOf(username);
+		if (noDealIndex > -1) {
+			dealNoDealVotesMap['NO DEAL'].splice(noDealIndex, 1);
+			changed = true;
+		}
+		return changed;
+	}
+
 	function updateLocalVoteDisplay(voterUsername: string, voteValue: string) {
-		// Check if the voteValue is for a case (i.e., a number)
 		const newVotedCaseNumber = parseInt(voteValue, 10);
 
 		if (isNaN(newVotedCaseNumber)) {
-			// This vote is not for a case number (e.g., "DEAL", "NO_DEAL").
-			// We only update caseVotesMap for case number votes.
-			// If there was a previous case vote by this player, we should clear it.
+			// This vote is NOT for a case number (e.g., "DEAL", "NO DEAL", or other).
+
+			// 1. Clear player's previous case vote (if any).
 			const oldVotedCaseIndex = playerVoteRecord[voterUsername];
 			if (oldVotedCaseIndex !== undefined) {
 				if (caseVotesMap[oldVotedCaseIndex]) {
@@ -60,23 +78,61 @@ function createDealNoDealStore() {
 						delete caseVotesMap[oldVotedCaseIndex];
 					}
 				}
-				delete playerVoteRecord[voterUsername]; // Player is no longer voting for a specific case
+				delete playerVoteRecord[voterUsername];
 				info(
 					`DealNoDealStore: Cleared previous case vote for ${voterUsername} due to non-case vote "${voteValue}".`
 				);
 			}
-			return; // Do not process non-case votes in this map.
+
+			// 2. Handle "DEAL" / "NO DEAL" vote.
+			if (voteValue === 'DEAL' || voteValue === 'NO DEAL') {
+				const dealVote = voteValue as DealNoDealVoteOption;
+				const otherVote: DealNoDealVoteOption = dealVote === 'DEAL' ? 'NO DEAL' : 'DEAL';
+
+				// Remove from the other list (if present)
+				const otherListIndex = dealNoDealVotesMap[otherVote].indexOf(voterUsername);
+				if (otherListIndex > -1) {
+					dealNoDealVotesMap[otherVote].splice(otherListIndex, 1);
+				}
+
+				// Add to the new list if not already present
+				if (!dealNoDealVotesMap[dealVote].includes(voterUsername)) {
+					dealNoDealVotesMap[dealVote].push(voterUsername);
+				}
+				info(
+					`DealNoDealStore: dealNoDealVotesMap updated for vote by ${voterUsername}: ${dealVote}. Map:`,
+					JSON.parse(JSON.stringify(dealNoDealVotesMap))
+				);
+			} else {
+				// This is a non-case vote that isn't "DEAL" or "NO DEAL".
+				// Clear any existing "DEAL" / "NO DEAL" vote for this player.
+				if (removeUserFromDealNoDealLists(voterUsername)) {
+					info(
+						`DealNoDealStore: Cleared DEAL/NO DEAL vote for ${voterUsername} due to other non-case vote "${voteValue}". Map:`,
+						JSON.parse(JSON.stringify(dealNoDealVotesMap))
+					);
+				}
+				warn(
+					`DealNoDealStore: Received unhandled non-case vote type "${voteValue}" from ${voterUsername}. Player's case and DEAL/NO DEAL votes cleared.`
+				);
+			}
+			return;
 		}
 
-		// Server should ensure newVotedCaseNumber is valid for the current game state.
-		// We just convert to 0-based index.
+		// If we reach here, it IS a case vote.
 		const newVotedCaseIndex = newVotedCaseNumber - 1;
 
-		// 1. Remove player's old vote from the map (if any)
+		// 1. Clear player's previous "DEAL" or "NO DEAL" vote (if any).
+		if (removeUserFromDealNoDealLists(voterUsername)) {
+			info(
+				`DealNoDealStore: Cleared DEAL/NO DEAL vote for ${voterUsername} due to new case vote for case ${newVotedCaseNumber}. Map:`,
+				JSON.parse(JSON.stringify(dealNoDealVotesMap))
+			);
+		}
+
+		// 2. Update caseVotesMap and playerVoteRecord for the case vote.
 		const oldVotedCaseIndex = playerVoteRecord[voterUsername];
 		if (oldVotedCaseIndex !== undefined && caseVotesMap[oldVotedCaseIndex]) {
-			// Ensure oldVotedCaseIndex is not the same as newVotedCaseIndex before filtering,
-			// though the logic handles it, it's more explicit.
 			if (oldVotedCaseIndex !== newVotedCaseIndex) {
 				caseVotesMap[oldVotedCaseIndex] = caseVotesMap[oldVotedCaseIndex].filter(
 					(name) => name !== voterUsername
@@ -87,16 +143,12 @@ function createDealNoDealStore() {
 			}
 		}
 
-		// 2. Add player's new vote to the map for the new case index
 		if (!caseVotesMap[newVotedCaseIndex]) {
 			caseVotesMap[newVotedCaseIndex] = [];
 		}
-		// Only add if not already there (covers case where player re-votes for same case, after old removed)
 		if (!caseVotesMap[newVotedCaseIndex].includes(voterUsername)) {
 			caseVotesMap[newVotedCaseIndex].push(voterUsername);
 		}
-
-		// 3. Update player's vote record
 		playerVoteRecord[voterUsername] = newVotedCaseIndex;
 
 		info(
@@ -115,19 +167,20 @@ function createDealNoDealStore() {
 				Object.assign(gameState, eventPayload.data);
 				info('DealNoDealStore: Full state updated.');
 				info(eventPayload.data);
-				// Clear local vote display maps as FullStateUpdate contains the official tally
-				// and signals a new voting segment or phase.
+
 				Object.keys(caseVotesMap).forEach((key) => delete caseVotesMap[Number(key)]);
 				Object.keys(playerVoteRecord).forEach((key) => delete playerVoteRecord[key]);
-				info('DealNoDealStore: caseVotesMap and playerVoteRecord cleared due to FullStateUpdate.');
+				// Reset dealNoDealVotesMap to initial empty lists
+				dealNoDealVotesMap['DEAL'] = [];
+				dealNoDealVotesMap['NO DEAL'] = [];
+				info(
+					'DealNoDealStore: caseVotesMap, playerVoteRecord, and dealNoDealVotesMap cleared due to FullStateUpdate.'
+				);
 				break;
 			case 'PlayerVoteRegistered':
 				info('DealNoDealStore: PlayerVoteRegistered event received:', eventPayload.data);
-				// The server is the source of truth for phase and validity.
-				// We only update the local display based on this event.
 				updateLocalVoteDisplay(eventPayload.data.voter_username, eventPayload.data.vote_value);
 				break;
-			// ... other cases
 			case 'CaseOpened':
 				info(
 					`DealNoDealStore: CaseOpened event received for case ${eventPayload.data.case_index + 1} with value ${eventPayload.data.value}`
@@ -144,7 +197,6 @@ function createDealNoDealStore() {
 	}
 
 	function sendCommand(command: DealNoDealCommandData['command']): void {
-		// ... (sendCommand remains the same)
 		const commandData: DealNoDealCommandData = { command };
 		const payload: GameSpecificCommandPayload = {
 			game_type_id: GAME_TYPE_ID,
@@ -170,6 +222,9 @@ function createDealNoDealStore() {
 		},
 		get caseVotesMap() {
 			return caseVotesMap;
+		},
+		get dealNoDealVotesMap() {
+			return dealNoDealVotesMap;
 		},
 		actions
 	};

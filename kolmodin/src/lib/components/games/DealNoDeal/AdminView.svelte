@@ -14,7 +14,7 @@
 	// currentPhaseType is used for the fallback message in the Player Information Card
 	//const currentPhaseType = $derived(dndState.phase.type);
 	const currentPhaseType = $derived(dealNoDealStore.gameState.phase.type);
-	const caseVotesMapFromStore = $derived(dealNoDealStore.caseVotesMap);
+	const dealNoDealMap = $derived(dealNoDealStore.dealNoDealVotesMap);
 
 	const moneyBoardColumns = $derived(() => {
 		const sortedValues = [...(dndState.briefcase_values || [])].sort((a, b) => a - b);
@@ -44,21 +44,25 @@
 						<h2 class="text-4xl font-bold">Vote for your briefcase</h2>
 					{:else if dndState.phase.type === 'RoundCaseOpening_Voting'}
 						<h2 class="text-3xl font-bold">
-							{dndState.phase.data.opened_so_far_for_round} / {dndState.phase.data.total_to_open_for_round} cases opened this round
+							{dndState.phase.data.opened_so_far_for_round} / {dndState.phase.data
+								.total_to_open_for_round} cases opened this round
 						</h2>
 					{:else if dndState.phase.type === 'BankerOfferCalculation'}
-						<h2 class="text-3xl font-bold text-muted-foreground">Banker is calculating the offer...</h2>
+						<h2 class="text-muted-foreground text-3xl font-bold">
+							Banker is calculating the offer...
+						</h2>
 					{:else if dndState.phase.type === 'DealOrNoDeal_Voting'}
 						<h2 class="text-4xl font-bold">
 							Banker offers ${dndState.phase.data.offer}. Deal or No Deal?
 						</h2>
 						<p>
-							deal: {caseVotesMapFromStore['DEAL']?.length} / no deal: {caseVotesMapFromStore['NO_DEAL']?.length}
+							deal: {dealNoDealMap['DEAL']?.length} / no deal: {dealNoDealMap['NO DEAL']?.length}
 						</p>
-						<p>{JSON.stringify(caseVotesMapFromStore, null, 4)}</p>
+						<p>{JSON.stringify(dealNoDealMap, null, 4)}</p>
 					{:else if dndState.phase.type === 'GameOver'}
 						<h2 class="text-4xl font-bold">
-							Game Over. {#if dndState.phase.winnings > 0}You won ${dndState.phase.winnings.toLocaleString()}!{:else}Better luck next time!{/if}
+							Game Over. {#if dndState.phase.data.winnings > 0}You won ${dndState.phase.data.winnings.toLocaleString()}!{:else}Better
+								luck next time!{/if}
 						</h2>
 					{:else}
 						<!-- Fallback for any other phase -->
