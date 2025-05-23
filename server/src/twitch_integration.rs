@@ -70,6 +70,13 @@ pub enum TwitchChannelConnectionStatus {
     Terminated,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChannelTerminationInfo {
+    pub channel_name: String,
+    pub actor_id: Uuid,
+    pub final_status: TwitchChannelConnectionStatus,
+}
+
 // --- Parsed Twitch Message (New Data Structure) ---
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedTwitchMessage {
@@ -298,9 +305,8 @@ impl TwitchChannelActorHandle {
     pub fn new(
         channel_name: String,
         oauth_token: Arc<String>,
-        manager_handle: TwitchChatManagerActorHandle, // Using the actual (to be defined) manager handle
         actor_buffer_size: usize,
-    ) -> Self {
+    ) -> (Self, JoinHandle<ChannelTerminationInfo>) {
         let (actor_tx, actor_rx) = mpsc::channel(actor_buffer_size);
         let (status_tx, status_rx) = watch::channel(TwitchChannelConnectionStatus::Initializing);
 
@@ -309,17 +315,19 @@ impl TwitchChannelActorHandle {
             actor_tx.clone(),
             channel_name.clone(),
             oauth_token,
-            manager_handle,
+            // REMOVED: manager_handle parameter
             status_tx.clone(),
         );
 
-        tokio::spawn(run_twitch_channel_actor(actor));
+        let join_handle = tokio::spawn(run_twitch_channel_actor(actor));
 
-        Self {
+        let handle = Self {
             sender: actor_tx,
             channel_name,
             status_rx,
-        }
+        };
+
+        (handle, join_handle)
     }
 
     pub async fn add_subscriber(
@@ -381,7 +389,6 @@ pub struct TwitchChannelActor {
     irc_connection_task_handle: Option<JoinHandle<()>>,
     irc_task_shutdown_tx: Option<oneshot::Sender<()>>,
     status_tx: watch::Sender<TwitchChannelConnectionStatus>,
-    manager_handle: TwitchChatManagerActorHandle, // Using the actual manager handle
 }
 
 impl TwitchChannelActor {
@@ -390,7 +397,6 @@ impl TwitchChannelActor {
         self_sender_for_irc_task: mpsc::Sender<TwitchChannelActorMessage>,
         channel_name: String,
         oauth_token: Arc<String>,
-        manager_handle: TwitchChatManagerActorHandle,
         status_tx: watch::Sender<TwitchChannelConnectionStatus>,
     ) -> Self {
         let actor_id = Uuid::new_v4();
@@ -411,7 +417,6 @@ impl TwitchChannelActor {
             irc_connection_task_handle: None,
             irc_task_shutdown_tx: None,
             status_tx,
-            manager_handle,
         }
     }
 
@@ -775,37 +780,39 @@ impl TwitchChannelActor {
     }
 }
 
-pub async fn run_twitch_channel_actor(mut actor: TwitchChannelActor) {
+pub async fn run_twitch_channel_actor(mut actor: TwitchChannelActor) -> ChannelTerminationInfo {
+    let channel_name = actor.channel_name.clone();
+    let actor_id = actor.actor_id;
+
     tracing::info!(
         "[TWITCH][ACTOR][{}][{}] Actor started.",
-        actor.channel_name,
-        actor.actor_id
+        channel_name,
+        actor_id
     );
 
+    // Main message loop
     while let Some(msg) = actor.receiver.recv().await {
         actor.handle_message(msg).await;
     }
 
+    // Cleanup
     actor.signal_irc_task_shutdown();
     actor.await_irc_task_completion().await;
 
+    let final_status = actor.status_tx.borrow().clone();
+
     tracing::info!(
-        "[TWITCH][ACTOR][{}][{}] Actor stopped.",
-        actor.channel_name,
-        actor.actor_id
+        "[TWITCH][ACTOR][{}][{}] Actor stopped with status: {:?}",
+        channel_name,
+        actor_id,
+        final_status
     );
 
-    if let Err(e) = actor
-        .manager_handle
-        .notify_channel_actor_terminated(actor.channel_name.clone(), actor.actor_id)
-        .await
-    {
-        tracing::error!(
-            "[TWITCH][ACTOR][{}][{}] Failed to notify manager of shutdown: {:?}",
-            actor.channel_name,
-            actor.actor_id,
-            e
-        );
+    // Return termination info instead of calling manager
+    ChannelTerminationInfo {
+        channel_name,
+        actor_id,
+        final_status,
     }
 }
 
