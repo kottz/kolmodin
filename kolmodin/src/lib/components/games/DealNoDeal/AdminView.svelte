@@ -52,13 +52,42 @@
 							Banker is calculating the offer...
 						</h2>
 					{:else if dndState.phase.type === 'DealOrNoDeal_Voting'}
-						<h2 class="text-4xl font-bold">
-							Banker offers ${dndState.phase.data.offer}. Deal or No Deal?
-						</h2>
-						<p>
-							deal: {dealNoDealMap['DEAL']?.length} / no deal: {dealNoDealMap['NO DEAL']?.length}
-						</p>
-						<p>{JSON.stringify(dealNoDealMap, null, 4)}</p>
+						<!-- Visual Deal/No Deal Voting Display -->
+						<div class="grid grid-cols-3 items-start gap-8">
+							<!-- DEAL Column -->
+							<div class="text-center">
+								<h3 class="mb-4 text-2xl font-bold">DEAL</h3>
+								<div class="space-y-2">
+									{#each dealNoDealMap['DEAL'] || [] as player}
+										<div class="text-lg">{player}</div>
+									{/each}
+									{#if !dealNoDealMap['DEAL'] || dealNoDealMap['DEAL'].length === 0}
+										<div class="text-muted-foreground italic">No votes yet</div>
+									{/if}
+								</div>
+							</div>
+
+							<!-- Bank Offer Column -->
+							<div class="text-center">
+								<h3 class="mb-2 text-xl font-semibold">Bank offer</h3>
+								<div class="text-4xl font-bold">
+									${dndState.phase.data.offer.toLocaleString()}
+								</div>
+							</div>
+
+							<!-- NO DEAL Column -->
+							<div class="text-center">
+								<h3 class="mb-4 text-2xl font-bold">NO DEAL</h3>
+								<div class="space-y-2">
+									{#each dealNoDealMap['NO DEAL'] || [] as player}
+										<div class="text-lg">{player}</div>
+									{/each}
+									{#if !dealNoDealMap['NO DEAL'] || dealNoDealMap['NO DEAL'].length === 0}
+										<div class="text-muted-foreground italic">No votes yet</div>
+									{/if}
+								</div>
+							</div>
+						</div>
 					{:else if dndState.phase.type === 'GameOver'}
 						<h2 class="text-4xl font-bold">
 							Game Over. {#if dndState.phase.data.winnings > 0}You won ${dndState.phase.data.winnings.toLocaleString()}!{:else}Better
