@@ -37,7 +37,6 @@
 		<div class="mb-6">
 			<Card>
 				<CardContent class="p-8 text-center">
-					<p>{JSON.stringify(dndState.phase, null, 4)}</p>
 					{#if dndState.phase.type === 'Setup'}
 						<h2 class="text-4xl font-bold">Waiting to start the game</h2>
 					{:else if dndState.phase.type === 'PlayerCaseSelection_Voting'}
