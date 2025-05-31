@@ -724,10 +724,16 @@ impl GameLogic for DealNoDealGame {
     fn is_empty(&self) -> bool {
         self.clients.is_empty()
     }
+
     fn game_type_id(&self) -> String {
         GAME_TYPE_ID_DND.to_string()
     }
+
     fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>> {
         self.clients.get(&client_id).cloned()
+    }
+
+    fn get_all_client_ids(&self) -> Vec<Uuid> {
+        self.clients.keys().copied().collect()
     }
 }

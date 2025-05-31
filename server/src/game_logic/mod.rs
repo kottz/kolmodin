@@ -48,4 +48,7 @@ pub trait GameLogic: Send + Sync + Debug {
     fn game_type_id(&self) -> String;
 
     fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>>;
+
+    /// Get all connected client IDs for broadcasting
+    fn get_all_client_ids(&self) -> Vec<Uuid>;
 }

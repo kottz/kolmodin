@@ -284,4 +284,8 @@ impl GameLogic for HelloWorldGame {
     fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>> {
         self.clients.get(&client_id).cloned()
     }
+
+    fn get_all_client_ids(&self) -> Vec<Uuid> {
+        self.clients.keys().copied().collect()
+    }
 }

@@ -83,7 +83,6 @@ struct LobbyActor<G: GameLogic + Send + 'static> {
 impl<G: GameLogic + Send + 'static> LobbyActor<G> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        // ... (same arguments as before) ...
         receiver: mpsc::Receiver<LobbyActorMessage>,
         lobby_id: Uuid,
         game_engine: G,
@@ -177,6 +176,8 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 self.game_engine
                     .client_connected(client_id, client_tx)
                     .await;
+
+                self.send_current_twitch_status_to_client(client_id).await;
             }
             LobbyActorMessage::ClientDisconnected { client_id } => {
                 tracing::debug!(
@@ -206,6 +207,131 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                     self.twitch_channel_name.as_deref().unwrap_or("N/A"),
                     status
                 );
+
+                // Broadcast the status update to all connected clients
+                self.broadcast_twitch_status_update(status).await;
+            }
+        }
+    }
+
+    async fn broadcast_twitch_status_update(&self, status: TwitchChannelConnectionStatus) {
+        // Convert the status to the format expected by the client
+        let (status_type, details) = match &status {
+            TwitchChannelConnectionStatus::Initializing => ("Initializing".to_string(), None),
+            TwitchChannelConnectionStatus::Connecting { attempt } => (
+                "Connecting".to_string(),
+                Some(format!("Attempt {}", attempt)),
+            ),
+            TwitchChannelConnectionStatus::Authenticating { attempt } => (
+                "Authenticating".to_string(),
+                Some(format!("Attempt {}", attempt)),
+            ),
+            TwitchChannelConnectionStatus::Connected => ("Connected".to_string(), None),
+            TwitchChannelConnectionStatus::Reconnecting {
+                reason,
+                failed_attempt,
+                retry_in,
+            } => (
+                "Reconnecting".to_string(),
+                Some(format!(
+                    "Attempt {} failed: {}. Retry in {}s",
+                    failed_attempt,
+                    reason,
+                    retry_in.as_secs()
+                )),
+            ),
+            TwitchChannelConnectionStatus::Disconnected { reason } => {
+                ("Disconnected".to_string(), Some(reason.clone()))
+            }
+            TwitchChannelConnectionStatus::Terminated => ("Terminated".to_string(), None),
+        };
+
+        // Create the data structure expected by the client
+        let status_data = serde_json::json!({
+            "channel_name": self.twitch_channel_name.clone(),
+            "status_type": status_type,
+            "details": details
+        });
+
+        // Send as GlobalEvent
+        let global_event_message = match ServerToClientMessage::new_global_event(
+            "TwitchStatusUpdate".to_string(),
+            &status_data,
+        ) {
+            Ok(msg) => msg,
+            Err(e) => {
+                tracing::error!(
+                    "Lobby {}: Failed to serialize Twitch status update: {}",
+                    self.lobby_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        if let Ok(ws_msg) = global_event_message.to_ws_text() {
+            // Get all client IDs and broadcast
+            let all_client_ids: Vec<Uuid> = self.game_engine.get_all_client_ids();
+
+            for client_id in all_client_ids {
+                if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
+                    if client_tx.send(ws_msg.clone()).await.is_err() {
+                        tracing::warn!(
+                            "Lobby {}: Failed to send Twitch status update to client {}",
+                            self.lobby_id,
+                            client_id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Send initial status when client connects
+    async fn send_current_twitch_status_to_client(&self, client_id: Uuid) {
+        let (status_type, details) = if self.twitch_channel_name.is_some() {
+            (
+                "Initializing".to_string(),
+                Some("Checking connection...".to_string()),
+            )
+        } else {
+            (
+                "Disconnected".to_string(),
+                Some("No Twitch channel configured".to_string()),
+            )
+        };
+
+        let status_data = serde_json::json!({
+            "channel_name": self.twitch_channel_name.clone(),
+            "status_type": status_type,
+            "details": details
+        });
+
+        let global_event_message = match ServerToClientMessage::new_global_event(
+            "TwitchStatusUpdate".to_string(),
+            &status_data,
+        ) {
+            Ok(msg) => msg,
+            Err(e) => {
+                tracing::error!(
+                    "Lobby {}: Failed to serialize initial Twitch status for client {}: {}",
+                    self.lobby_id,
+                    client_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
+            if let Ok(ws_msg) = global_event_message.to_ws_text() {
+                if client_tx.send(ws_msg).await.is_err() {
+                    tracing::warn!(
+                        "Lobby {}: Failed to send initial Twitch status to client {}",
+                        self.lobby_id,
+                        client_id
+                    );
+                }
             }
         }
     }
