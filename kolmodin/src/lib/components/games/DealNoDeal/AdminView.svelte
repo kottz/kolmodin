@@ -15,6 +15,7 @@
 	//const currentPhaseType = $derived(dndState.phase.type);
 	const currentPhaseType = $derived(dealNoDealStore.gameState.phase.type);
 	const dealNoDealMap = $derived(dealNoDealStore.dealNoDealVotesMap);
+	const switchKeepMap = $derived(dealNoDealStore.switchKeepVotesMap);
 
 	const moneyBoardColumns = $derived(() => {
 		const sortedValues = [...(dndState.briefcase_values || [])].sort((a, b) => a - b);
@@ -82,6 +83,47 @@
 										<div class="text-lg">{player}</div>
 									{/each}
 									{#if !dealNoDealMap['NO DEAL'] || dealNoDealMap['NO DEAL'].length === 0}
+										<div class="text-muted-foreground italic">No votes yet</div>
+									{/if}
+								</div>
+							</div>
+						</div>
+					{:else if dndState.phase.type === 'SwitchOrKeep_Voting'}
+						<!-- Visual Switch/Keep Voting Display -->
+						<div class="grid grid-cols-3 items-start gap-8">
+							<!-- SWITCH Column -->
+							<div class="text-center">
+								<h3 class="mb-4 text-2xl font-bold">SWITCH</h3>
+								<div class="space-y-2">
+									{#each switchKeepMap['SWITCH'] || [] as player}
+										<div class="text-lg">{player}</div>
+									{/each}
+									{#if !switchKeepMap['SWITCH'] || switchKeepMap['SWITCH'].length === 0}
+										<div class="text-muted-foreground italic">No votes yet</div>
+									{/if}
+								</div>
+							</div>
+
+							<!-- Final Decision Column -->
+							<div class="text-center">
+								<h3 class="mb-2 text-xl font-semibold">Final Decision</h3>
+								<div class="mb-2 text-2xl font-bold">
+									Your Case #{(dndState.player_chosen_case_index || 0) + 1}
+								</div>
+								<div class="text-muted-foreground mb-2 text-lg">vs</div>
+								<div class="text-2xl font-bold">
+									Case #{dndState.phase.data.final_case_index + 1}
+								</div>
+							</div>
+
+							<!-- KEEP Column -->
+							<div class="text-center">
+								<h3 class="mb-4 text-2xl font-bold">KEEP</h3>
+								<div class="space-y-2">
+									{#each switchKeepMap['KEEP'] || [] as player}
+										<div class="text-lg">{player}</div>
+									{/each}
+									{#if !switchKeepMap['KEEP'] || switchKeepMap['KEEP'].length === 0}
 										<div class="text-muted-foreground italic">No votes yet</div>
 									{/if}
 								</div>

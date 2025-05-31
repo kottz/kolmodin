@@ -21,7 +21,8 @@ const MONEY_VALUES: [u64; TOTAL_CASES as usize] = [
     1, 3, 5, 10, 25, 50, 75, 100, 200, 300, 400, 500, 750, 1_000, 5_000, 10_000, 25_000, 50_000,
     75_000, 100_000, 200_000, 300_000, 400_000, 500_000, 750_000, 1_000_000,
 ];
-const ROUND_SCHEDULE: [u8; 6] = [6, 5, 4, 3, 2, 1];
+
+const ROUND_SCHEDULE: [u8; 9] = [6, 5, 4, 3, 2, 1, 1, 1, 1];
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "command")]
@@ -66,6 +67,10 @@ pub enum GamePhase {
     DealOrNoDeal_Voting {
         round_number: u8,
         offer: u64,
+    },
+    SwitchOrKeep_Voting {
+        // Final phase when only 1 case remains
+        final_case_index: usize,
     },
     GameOver {
         summary: String,
@@ -158,6 +163,13 @@ impl DealNoDealGame {
                     Some(*current_offer),
                 )
             }
+            GamePhase::SwitchOrKeep_Voting { .. } => (
+                ROUND_SCHEDULE.len() as u8 + 1,
+                0,
+                0,
+                Some(self.tally_current_votes_internal()),
+                None,
+            ),
             GamePhase::GameOver { winnings, .. } => {
                 (ROUND_SCHEDULE.len() as u8 + 1, 0, 0, None, Some(*winnings)) // Display a "final" round number
             }
@@ -374,6 +386,18 @@ impl DealNoDealGame {
         Some(deal >= no_deal)
     }
 
+    fn process_switch_or_keep_votes_from_tally(
+        &self,
+        tally: &HashMap<String, u32>,
+    ) -> Option<bool> {
+        let switch_votes = tally.get("SWITCH").cloned().unwrap_or(0);
+        let keep_votes = tally.get("KEEP").cloned().unwrap_or(0);
+        if switch_votes == 0 && keep_votes == 0 {
+            return Some(false); // Default to KEEP if no votes
+        }
+        Some(switch_votes > keep_votes)
+    }
+
     async fn admin_cmd_start_game(&mut self) {
         if matches!(self.phase, GamePhase::Setup | GamePhase::GameOver { .. }) {
             self.initialize_game_board();
@@ -511,29 +535,37 @@ impl DealNoDealGame {
                     };
                 } else {
                     // NO DEAL
-                    // current_round_schedule_index was for the round just completed. Advance it for the next round.
                     self.current_round_schedule_index += 1;
 
-                    let unopened_not_player = self
+                    let unopened_not_player: Vec<usize> = self
                         .briefcase_is_opened
                         .iter()
                         .zip(0..)
-                        .filter(|&(is_open, ref idx)| {
-                            !is_open && Some(*idx) != self.player_chosen_case_index
+                        .filter(|&(is_open, idx)| {
+                            !is_open && Some(idx) != self.player_chosen_case_index
                         })
-                        .count();
+                        .map(|(_, idx)| idx)
+                        .collect();
 
-                    if self.current_round_schedule_index >= ROUND_SCHEDULE.len()
-                        || unopened_not_player == 0
-                    {
+                    if unopened_not_player.len() == 1 {
+                        // Final decision: Switch or Keep
+                        let final_case_idx = unopened_not_player[0];
+                        self.phase = GamePhase::SwitchOrKeep_Voting {
+                            final_case_index: final_case_idx,
+                        };
+                        self.current_votes_by_user.clear();
+                    } else if self.current_round_schedule_index >= ROUND_SCHEDULE.len() {
+                        // This shouldn't happen with the correct schedule, but safety check
                         self.end_game_no_deal_final_case().await;
                         return;
                     } else {
                         let next_display_r_num = round_number + 1;
-                        let sched_open_for_next_round =
+                        let cases_to_open_next_round =
                             ROUND_SCHEDULE[self.current_round_schedule_index];
-                        let actual_open_for_next_round =
-                            std::cmp::min(sched_open_for_next_round, unopened_not_player as u8);
+                        let actual_open_for_next_round = std::cmp::min(
+                            cases_to_open_next_round,
+                            unopened_not_player.len() as u8,
+                        );
 
                         if actual_open_for_next_round > 0 {
                             self.phase = GamePhase::RoundCaseOpening_Voting {
@@ -548,6 +580,69 @@ impl DealNoDealGame {
                         }
                     }
                 }
+            }
+            GamePhase::SwitchOrKeep_Voting { final_case_index } => {
+                let should_switch = self
+                    .process_switch_or_keep_votes_from_tally(&final_tally)
+                    .unwrap_or(false);
+
+                let p_case_idx = self
+                    .player_chosen_case_index
+                    .expect("Player case index missing during SwitchOrKeep");
+                let p_case_val = self.briefcase_values[p_case_idx];
+                let final_case_val = self.briefcase_values[final_case_index];
+
+                // Open the final case for dramatic effect
+                if !self.briefcase_is_opened[final_case_index] {
+                    self.open_briefcase(final_case_index);
+                }
+
+                self.broadcast_game_event_to_all_admins(GameEvent::CaseOpened {
+                    case_index: final_case_index,
+                    value: final_case_val,
+                    is_player_case_reveal_at_end: false,
+                })
+                .await;
+
+                let (winnings, summary) = if should_switch {
+                    (
+                        final_case_val,
+                        format!(
+                            "SWITCH! Twitch switched and won ${}! Their original case #{} contained ${}.",
+                            final_case_val,
+                            p_case_idx + 1,
+                            p_case_val
+                        ),
+                    )
+                } else {
+                    // Open player's case for reveal
+                    if !self.briefcase_is_opened[p_case_idx] {
+                        self.open_briefcase(p_case_idx);
+                    }
+
+                    self.broadcast_game_event_to_all_admins(GameEvent::CaseOpened {
+                        case_index: p_case_idx,
+                        value: p_case_val,
+                        is_player_case_reveal_at_end: true,
+                    })
+                    .await;
+
+                    (
+                        p_case_val,
+                        format!(
+                            "KEEP! Twitch kept their original case #{} and won ${}! The other case contained ${}.",
+                            p_case_idx + 1,
+                            p_case_val,
+                            final_case_val
+                        ),
+                    )
+                };
+
+                self.phase = GamePhase::GameOver {
+                    summary,
+                    winnings,
+                    player_case_original_value: p_case_val,
+                };
             }
             _ => {
                 tracing::warn!(
@@ -620,6 +715,15 @@ impl DealNoDealGame {
                 }
                 if ["no", "nodeal", "no deal", "n"].contains(&lower.as_str()) {
                     return (true, Some("NO DEAL".to_string()));
+                }
+            }
+            GamePhase::SwitchOrKeep_Voting { .. } => {
+                let lower = vote_text.to_lowercase();
+                if ["switch", "swap", "yes", "s"].contains(&lower.as_str()) {
+                    return (true, Some("SWITCH".to_string()));
+                }
+                if ["keep", "stay", "no", "k"].contains(&lower.as_str()) {
+                    return (true, Some("KEEP".to_string()));
                 }
             }
             _ => {}
@@ -696,6 +800,7 @@ impl GameLogic for DealNoDealGame {
             GamePhase::PlayerCaseSelection_Voting
                 | GamePhase::RoundCaseOpening_Voting { .. }
                 | GamePhase::DealOrNoDeal_Voting { .. }
+                | GamePhase::SwitchOrKeep_Voting { .. }
         );
 
         if !is_voting_active_phase {

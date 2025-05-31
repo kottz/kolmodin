@@ -30,6 +30,12 @@ export type GamePhaseType =
 			};
 	  }
 	| {
+			type: 'SwitchOrKeep_Voting';
+			data: {
+				final_case_index: number; // usize
+			};
+	  }
+	| {
 			type: 'GameOver';
 			data: {
 				summary: string;

@@ -37,14 +37,37 @@ type DealNoDealVotesMapType = {
 	'NO DEAL': string[]; // Array of usernames who voted NO DEAL
 };
 
+type SwitchKeepVoteOption = 'SWITCH' | 'KEEP';
+type SwitchKeepVotesMapType = {
+	SWITCH: string[]; // Array of usernames who voted SWITCH
+	KEEP: string[]; // Array of usernames who voted KEEP
+};
+
 function createDealNoDealStore() {
 	const gameState = $state<DealNoDealGameState>(createInitialDndState());
 	const caseVotesMap = $state<CaseVotesMapType>({});
 	const playerVoteRecord = $state<PlayerVoteRecordType>({});
 	// Initialize with empty arrays for DEAL and NO DEAL
 	const dealNoDealVotesMap = $state<DealNoDealVotesMapType>({ DEAL: [], 'NO DEAL': [] });
+	// Add switch/keep votes map
+	const switchKeepVotesMap = $state<SwitchKeepVotesMapType>({ SWITCH: [], KEEP: [] });
 
 	info('DealNoDealStore: Initializing store...');
+
+	function removeUserFromSwitchKeepLists(username: string) {
+		let changed = false;
+		const switchIndex = switchKeepVotesMap['SWITCH'].indexOf(username);
+		if (switchIndex > -1) {
+			switchKeepVotesMap['SWITCH'].splice(switchIndex, 1);
+			changed = true;
+		}
+		const keepIndex = switchKeepVotesMap['KEEP'].indexOf(username);
+		if (keepIndex > -1) {
+			switchKeepVotesMap['KEEP'].splice(keepIndex, 1);
+			changed = true;
+		}
+		return changed;
+	}
 
 	function removeUserFromDealNoDealLists(username: string) {
 		let changed = false;
@@ -58,6 +81,10 @@ function createDealNoDealStore() {
 			dealNoDealVotesMap['NO DEAL'].splice(noDealIndex, 1);
 			changed = true;
 		}
+		// Also clear switch/keep votes when clearing deal/no deal
+		if (removeUserFromSwitchKeepLists(username)) {
+			changed = true;
+		}
 		return changed;
 	}
 
@@ -65,7 +92,7 @@ function createDealNoDealStore() {
 		const newVotedCaseNumber = parseInt(voteValue, 10);
 
 		if (isNaN(newVotedCaseNumber)) {
-			// This vote is NOT for a case number (e.g., "DEAL", "NO DEAL", or other).
+			// This vote is NOT for a case number (e.g., "DEAL", "NO DEAL", "SWITCH", "KEEP", etc.).
 
 			// 1. Clear player's previous case vote (if any).
 			const oldVotedCaseIndex = playerVoteRecord[voterUsername];
@@ -89,6 +116,9 @@ function createDealNoDealStore() {
 				const dealVote = voteValue as DealNoDealVoteOption;
 				const otherVote: DealNoDealVoteOption = dealVote === 'DEAL' ? 'NO DEAL' : 'DEAL';
 
+				// Clear any switch/keep votes for this user
+				removeUserFromSwitchKeepLists(voterUsername);
+
 				// Remove from the other list (if present)
 				const otherListIndex = dealNoDealVotesMap[otherVote].indexOf(voterUsername);
 				if (otherListIndex > -1) {
@@ -103,17 +133,39 @@ function createDealNoDealStore() {
 					`DealNoDealStore: dealNoDealVotesMap updated for vote by ${voterUsername}: ${dealVote}. Map:`,
 					JSON.parse(JSON.stringify(dealNoDealVotesMap))
 				);
+			}
+			// 3. Handle "SWITCH" / "KEEP" vote.
+			else if (voteValue === 'SWITCH' || voteValue === 'KEEP') {
+				const switchKeepVote = voteValue as SwitchKeepVoteOption;
+				const otherVote: SwitchKeepVoteOption = switchKeepVote === 'SWITCH' ? 'KEEP' : 'SWITCH';
+
+				// Clear any deal/no deal votes for this user
+				removeUserFromDealNoDealLists(voterUsername);
+
+				// Remove from the other list (if present)
+				const otherListIndex = switchKeepVotesMap[otherVote].indexOf(voterUsername);
+				if (otherListIndex > -1) {
+					switchKeepVotesMap[otherVote].splice(otherListIndex, 1);
+				}
+
+				// Add to the new list if not already present
+				if (!switchKeepVotesMap[switchKeepVote].includes(voterUsername)) {
+					switchKeepVotesMap[switchKeepVote].push(voterUsername);
+				}
+				info(
+					`DealNoDealStore: switchKeepVotesMap updated for vote by ${voterUsername}: ${switchKeepVote}. Map:`,
+					JSON.parse(JSON.stringify(switchKeepVotesMap))
+				);
 			} else {
-				// This is a non-case vote that isn't "DEAL" or "NO DEAL".
-				// Clear any existing "DEAL" / "NO DEAL" vote for this player.
+				// This is a non-case vote that isn't "DEAL", "NO DEAL", "SWITCH", or "KEEP".
+				// Clear any existing votes for this player.
 				if (removeUserFromDealNoDealLists(voterUsername)) {
 					info(
-						`DealNoDealStore: Cleared DEAL/NO DEAL vote for ${voterUsername} due to other non-case vote "${voteValue}". Map:`,
-						JSON.parse(JSON.stringify(dealNoDealVotesMap))
+						`DealNoDealStore: Cleared all votes for ${voterUsername} due to other non-case vote "${voteValue}".`
 					);
 				}
 				warn(
-					`DealNoDealStore: Received unhandled non-case vote type "${voteValue}" from ${voterUsername}. Player's case and DEAL/NO DEAL votes cleared.`
+					`DealNoDealStore: Received unhandled non-case vote type "${voteValue}" from ${voterUsername}. All votes cleared.`
 				);
 			}
 			return;
@@ -122,11 +174,10 @@ function createDealNoDealStore() {
 		// If we reach here, it IS a case vote.
 		const newVotedCaseIndex = newVotedCaseNumber - 1;
 
-		// 1. Clear player's previous "DEAL" or "NO DEAL" vote (if any).
+		// 1. Clear player's previous non-case votes (if any).
 		if (removeUserFromDealNoDealLists(voterUsername)) {
 			info(
-				`DealNoDealStore: Cleared DEAL/NO DEAL vote for ${voterUsername} due to new case vote for case ${newVotedCaseNumber}. Map:`,
-				JSON.parse(JSON.stringify(dealNoDealVotesMap))
+				`DealNoDealStore: Cleared all non-case votes for ${voterUsername} due to new case vote for case ${newVotedCaseNumber}.`
 			);
 		}
 
@@ -170,12 +221,12 @@ function createDealNoDealStore() {
 
 				Object.keys(caseVotesMap).forEach((key) => delete caseVotesMap[Number(key)]);
 				Object.keys(playerVoteRecord).forEach((key) => delete playerVoteRecord[key]);
-				// Reset dealNoDealVotesMap to initial empty lists
+				// Reset all vote maps to initial empty lists
 				dealNoDealVotesMap['DEAL'] = [];
 				dealNoDealVotesMap['NO DEAL'] = [];
-				info(
-					'DealNoDealStore: caseVotesMap, playerVoteRecord, and dealNoDealVotesMap cleared due to FullStateUpdate.'
-				);
+				switchKeepVotesMap['SWITCH'] = [];
+				switchKeepVotesMap['KEEP'] = [];
+				info('DealNoDealStore: All vote maps cleared due to FullStateUpdate.');
 				break;
 			case 'PlayerVoteRegistered':
 				info('DealNoDealStore: PlayerVoteRegistered event received:', eventPayload.data);
@@ -225,6 +276,9 @@ function createDealNoDealStore() {
 		},
 		get dealNoDealVotesMap() {
 			return dealNoDealVotesMap;
+		},
+		get switchKeepVotesMap() {
+			return switchKeepVotesMap;
 		},
 		actions
 	};
