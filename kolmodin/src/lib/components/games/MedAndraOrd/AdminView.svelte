@@ -20,7 +20,7 @@
 	const currentPhase = $derived(gameState.phase.type);
 
 	let targetPointsInput = $state('10');
-	let roundDurationInput = $state('60');
+	let gameDurationInput = $state('300'); // 5 minutes default
 	let pointLimitEnabled = $state(true);
 	let timeLimitEnabled = $state(false);
 
@@ -31,10 +31,10 @@
 		}
 	}
 
-	function handleSetRoundDuration() {
-		const seconds = parseInt(roundDurationInput);
+	function handleSetGameDuration() {
+		const seconds = parseInt(gameDurationInput);
 		if (!isNaN(seconds) && seconds > 0) {
-			medAndraOrdStore.actions.setRoundDuration(seconds);
+			medAndraOrdStore.actions.setGameDuration(seconds);
 		}
 	}
 
@@ -72,7 +72,7 @@
 						</div>
 						{#if timeLimitEnabled}
 							<div class="text-muted-foreground text-2xl">
-								Time: {formatTime(displayTimer())}
+								Game Time: {formatTime(displayTimer())}
 							</div>
 						{/if}
 						<p class="text-muted-foreground mt-2 text-sm">
@@ -84,7 +84,13 @@
 							🎉 Winner: {winner()} 🎉
 						</div>
 						<p class="text-muted-foreground mt-2 text-lg">
-							Congratulations on reaching {gameState.target_points} points!
+							{#if gameState.point_limit_enabled && gameState.time_limit_enabled}
+								Game ended - target reached or time expired!
+							{:else if gameState.point_limit_enabled}
+								Congratulations on reaching {gameState.target_points} points!
+							{:else}
+								Time's up! Final scores are shown below.
+							{/if}
 						</p>
 					{/if}
 				</CardContent>
@@ -137,24 +143,24 @@
 							<div class="space-y-3">
 								<Checkbox
 									id="time-limit-enabled"
-									label="Time Limit"
+									label="Game Time Limit"
 									bind:checked={timeLimitEnabled}
 									onCheckedChange={handleTimeLimitToggle}
 								/>
 								<div class="space-y-2">
 									<div class="flex gap-2">
 										<Input
-											id="round-duration"
+											id="game-duration"
 											type="number"
-											min="10"
-											max="300"
-											bind:value={roundDurationInput}
-											placeholder="60"
+											min="60"
+											max="1800"
+											bind:value={gameDurationInput}
+											placeholder="300"
 											class="flex-1"
 											disabled={!timeLimitEnabled}
 										/>
 										<Button
-											onclick={handleSetRoundDuration}
+											onclick={handleSetGameDuration}
 											variant="outline"
 											size="sm"
 											disabled={!timeLimitEnabled}
@@ -162,6 +168,7 @@
 											Set
 										</Button>
 									</div>
+									<p class="text-muted-foreground text-xs">Duration in seconds (60-1800)</p>
 								</div>
 							</div>
 							<Button onclick={medAndraOrdStore.actions.startGame} class="w-full" size="lg">
@@ -208,9 +215,9 @@
 						{/if}
 						{#if timeLimitEnabled}
 							<div class="flex justify-between">
-								<span class="text-muted-foreground text-sm">Round Duration:</span>
+								<span class="text-muted-foreground text-sm">Game Duration:</span>
 								<Badge variant="secondary">
-									{gameState.round_duration_seconds}s
+									{formatTime(gameState.game_duration_seconds)}
 								</Badge>
 							</div>
 						{/if}
@@ -220,15 +227,13 @@
 								{leaderboard().length}
 							</Badge>
 						</div>
-						{#if currentPhase === 'Playing'}
-							{#if timeLimitEnabled}
-								<div class="flex justify-between">
-									<span class="text-muted-foreground text-sm">Time Left:</span>
-									<Badge variant={displayTimer() <= 10 ? 'destructive' : 'default'}>
-										{formatTime(displayTimer())}
-									</Badge>
-								</div>
-							{/if}
+						{#if currentPhase === 'Playing' && timeLimitEnabled}
+							<div class="flex justify-between">
+								<span class="text-muted-foreground text-sm">Time Remaining:</span>
+								<Badge variant={displayTimer() <= 30 ? 'destructive' : 'default'}>
+									{formatTime(displayTimer())}
+								</Badge>
+							</div>
 						{/if}
 					</CardContent>
 				</Card>

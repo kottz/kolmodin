@@ -38,7 +38,7 @@ pub enum AdminCommand {
     PassWord,
     ResetGame,
     SetTargetPoints { points: u32 },
-    SetRoundDuration { seconds: u32 },
+    SetGameDuration { seconds: u32 }, // Changed from SetRoundDuration
     SetPointLimitEnabled { enabled: bool },
     SetTimeLimitEnabled { enabled: bool },
 }
@@ -51,6 +51,7 @@ pub enum GameEvent {
     WordChanged { word: String },
     PlayerScored { player: String, points: u32 },
     GamePhaseChanged { new_phase: GamePhase },
+    GameTimeUpdate { remaining_seconds: u64 }, // Optional: for time sync
 }
 
 // Game Phases
@@ -70,7 +71,7 @@ pub struct MedAndraOrdGameState {
 
     pub phase: GamePhase,
     pub target_points: u32,
-    pub round_duration_seconds: u64, // Configurable duration per word
+    pub game_duration_seconds: u64, // Changed from round_duration_seconds - total game duration
     pub point_limit_enabled: bool,
     pub time_limit_enabled: bool,
     pub player_scores: HashMap<String, u32>,
@@ -80,7 +81,7 @@ pub struct MedAndraOrdGameState {
     #[serde(skip)]
     used_words: HashSet<String>,
     #[serde(skip)]
-    round_start_time: Option<Instant>,
+    game_start_time: Option<Instant>, // Changed from round_start_time
 }
 
 impl Clone for MedAndraOrdGameState {
@@ -89,13 +90,13 @@ impl Clone for MedAndraOrdGameState {
             clients: HashMap::new(), // Don't clone clients
             phase: self.phase.clone(),
             target_points: self.target_points,
-            round_duration_seconds: self.round_duration_seconds,
+            game_duration_seconds: self.game_duration_seconds,
             point_limit_enabled: self.point_limit_enabled,
             time_limit_enabled: self.time_limit_enabled,
             player_scores: self.player_scores.clone(),
             words: self.words.clone(),
             used_words: self.used_words.clone(),
-            round_start_time: self.round_start_time,
+            game_start_time: self.game_start_time,
         }
     }
 }
@@ -108,13 +109,13 @@ impl MedAndraOrdGameState {
             clients: HashMap::new(),
             phase: GamePhase::Setup,
             target_points: 10,
-            round_duration_seconds: 60,
+            game_duration_seconds: 300, // 5 minutes default
             point_limit_enabled: true,
             time_limit_enabled: false,
             player_scores: HashMap::new(),
             words,
             used_words: HashSet::new(),
-            round_start_time: None,
+            game_start_time: None,
         }
     }
 
@@ -191,6 +192,59 @@ impl MedAndraOrdGameState {
         }
     }
 
+    // Check if game time has expired
+    pub fn check_game_time_expired(&self) -> bool {
+        if !self.time_limit_enabled {
+            return false;
+        }
+
+        if let Some(start_time) = self.game_start_time {
+            let elapsed = start_time.elapsed();
+            elapsed.as_secs() >= self.game_duration_seconds
+        } else {
+            false
+        }
+    }
+
+    // Get remaining game time
+    pub fn get_remaining_game_time(&self) -> Option<u64> {
+        if !self.time_limit_enabled {
+            return None;
+        }
+
+        if let Some(start_time) = self.game_start_time {
+            let elapsed = start_time.elapsed().as_secs();
+            if elapsed >= self.game_duration_seconds {
+                Some(0)
+            } else {
+                Some(self.game_duration_seconds - elapsed)
+            }
+        } else {
+            Some(self.game_duration_seconds)
+        }
+    }
+
+    // End game due to time expiration
+    async fn end_game_time_expired(&mut self) {
+        // Find player with most points
+        let winner = self
+            .player_scores
+            .iter()
+            .max_by_key(|&(_, &points)| points)
+            .map(|(player, _)| player.clone())
+            .unwrap_or_else(|| "No players".to_string());
+
+        self.phase = GamePhase::GameOver { winner };
+        self.game_start_time = None;
+
+        self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            new_phase: self.phase.clone(),
+        })
+        .await;
+
+        tracing::info!("MedAndraOrd: Game ended due to time expiration");
+    }
+
     // Game-specific methods
     async fn handle_start_game(&mut self) {
         if self.phase != GamePhase::Setup {
@@ -200,8 +254,8 @@ impl MedAndraOrdGameState {
         self.used_words.clear();
         self.player_scores.clear();
 
-        // Record start time for server-side validation
-        self.round_start_time = Some(Instant::now());
+        // Start game timer
+        self.game_start_time = Some(Instant::now());
 
         if let Some(word) = self.get_next_word() {
             self.phase = GamePhase::Playing {
@@ -218,20 +272,20 @@ impl MedAndraOrdGameState {
 
     async fn handle_pass_word(&mut self) {
         if let GamePhase::Playing { .. } = &self.phase {
+            // Check if game time expired before passing word
+            if self.check_game_time_expired() {
+                self.end_game_time_expired().await;
+                return;
+            }
+
             if let Some(word) = self.get_next_word() {
                 self.phase = GamePhase::Playing {
                     current_word: word.clone(),
                 };
 
-                // Reset timer for the new word
-                self.round_start_time = Some(Instant::now());
-
+                // Only send WordChanged event - phase type hasn't changed
                 self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
                     .await;
-                self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
-                    new_phase: self.phase.clone(),
-                })
-                .await;
             }
         }
     }
@@ -240,24 +294,12 @@ impl MedAndraOrdGameState {
         self.phase = GamePhase::Setup;
         self.player_scores.clear();
         self.used_words.clear();
-        self.round_start_time = None;
+        self.game_start_time = None;
+
         self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
             new_phase: self.phase.clone(),
         })
         .await;
-    }
-
-    // Check if the guess is within the time limit
-    fn is_guess_within_time_limit(&self) -> bool {
-        let elapsed = match self.round_start_time {
-            Some(start_time) => start_time.elapsed(),
-            None => {
-                tracing::warn!("Round start time not set");
-                return false;
-            }
-        };
-
-        elapsed.as_secs() <= self.round_duration_seconds
     }
 
     fn handle_set_target_points(&mut self, points: u32) {
@@ -266,9 +308,9 @@ impl MedAndraOrdGameState {
         }
     }
 
-    fn handle_set_round_duration(&mut self, seconds: u32) {
+    fn handle_set_game_duration(&mut self, seconds: u32) {
         if self.phase == GamePhase::Setup {
-            self.round_duration_seconds = seconds as u64;
+            self.game_duration_seconds = seconds as u64;
         }
     }
 
@@ -302,6 +344,12 @@ impl MedAndraOrdGameState {
     }
 
     async fn process_correct_guess(&mut self, player: &str) {
+        // Check if game time expired before processing guess
+        if self.check_game_time_expired() {
+            self.end_game_time_expired().await;
+            return;
+        }
+
         let current_score = self.player_scores.get(player).unwrap_or(&0) + 1;
         self.player_scores.insert(player.to_string(), current_score);
 
@@ -313,7 +361,7 @@ impl MedAndraOrdGameState {
 
         // Check if player won by reaching point target (if enabled)
         if self.point_limit_enabled && current_score >= self.target_points {
-            self.round_start_time = None;
+            self.game_start_time = None;
             self.phase = GamePhase::GameOver {
                 winner: player.to_string(),
             };
@@ -324,19 +372,23 @@ impl MedAndraOrdGameState {
             return;
         }
 
-        // Get next word
+        // Get next word (no timer reset, no phase change)
         if let Some(word) = self.get_next_word() {
             self.phase = GamePhase::Playing {
                 current_word: word.clone(),
             };
-            self.round_start_time = Some(Instant::now());
 
+            // Only send WordChanged event - phase type hasn't changed
             self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
                 .await;
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
-                new_phase: self.phase.clone(),
-            })
-            .await;
+        }
+    }
+
+    // Public method to be called periodically to check game expiration
+    pub async fn check_and_handle_game_expiration(&mut self) {
+        if matches!(self.phase, GamePhase::Playing { .. }) && self.check_game_time_expired() {
+            self.end_game_time_expired().await;
+            self.broadcast_full_state_update().await;
         }
     }
 }
@@ -377,8 +429,8 @@ impl GameLogic for MedAndraOrdGameState {
                             AdminCommand::SetTargetPoints { points } => {
                                 self.handle_set_target_points(points)
                             }
-                            AdminCommand::SetRoundDuration { seconds } => {
-                                self.handle_set_round_duration(seconds)
+                            AdminCommand::SetGameDuration { seconds } => {
+                                self.handle_set_game_duration(seconds)
                             }
                             AdminCommand::SetPointLimitEnabled { enabled } => {
                                 self.handle_set_point_limit_enabled(enabled)
@@ -415,12 +467,10 @@ impl GameLogic for MedAndraOrdGameState {
 
         // Process Twitch chat messages based on game phase
         if let GamePhase::Playing { current_word } = &self.phase {
-            // Server-side validation: check if guess is within time limit
-            if !self.is_guess_within_time_limit() {
-                tracing::info!(
-                    "MedAndraOrd: Guess from {} ignored - round time expired",
-                    message.sender_username
-                );
+            // Check if game time expired before processing guess
+            if self.check_game_time_expired() {
+                self.end_game_time_expired().await;
+                self.broadcast_full_state_update().await;
                 return;
             }
 
