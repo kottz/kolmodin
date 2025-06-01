@@ -5,14 +5,14 @@
 	import { info, warn } from '$lib/utils/logger';
 
 	import DealNoDealAdminView from '$lib/components/games/DealNoDeal/AdminView.svelte';
-	// import HelloWorldAdminView from '$lib/components/games/HelloWorldGame/AdminView.svelte';
-
+	import MedAndraOrdAdminView from '$lib/components/games/MedAndraOrd/AdminView.svelte';
 	// Optional shared components (ensure they exist or comment out)
 	// import GameLog from '$lib/components/shared/GameLog.svelte';
 	// import LatestGameEventDisplay from '$lib/components/shared/LatestGameEventDisplay.svelte';
 
 	const gameComponentMap = {
-		DealNoDeal: DealNoDealAdminView
+		DealNoDeal: DealNoDealAdminView,
+		MedAndraOrd: MedAndraOrdAdminView
 		// HelloWorldGame: HelloWorldAdminView,
 	};
 

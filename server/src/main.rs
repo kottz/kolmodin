@@ -28,13 +28,14 @@ mod twitch_integration;
 
 // --- Imports from our modules ---
 use game_logic::{
-    ClientToServerMessage, // Add this
+    ClientToServerMessage,
     DealNoDealGame,
     GameLogic,
     GameTwoEcho,
     HelloWorldGame,
-    ServerToClientMessage,     // Add this
-    messages as game_messages, // For the deserialization helper
+    MedAndraOrdGameState,
+    ServerToClientMessage, // For the deserialization helper
+    messages as game_messages,
 };
 use twitch_chat_manager::TwitchChatManagerActorHandle;
 use twitch_integration::{
@@ -724,6 +725,19 @@ impl LobbyManagerActor {
                                 requested_twitch_channel.clone(),
                                 self.twitch_chat_manager_handle.clone(),
                             );
+                        }
+                        "medandraord" | "medandra" | "ord" => {
+                            let game_engine = MedAndraOrdGameState::new();
+                            actual_game_type_created = game_engine.game_type_id();
+                            lobby_actor_handle =
+                                LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
+                                    lobby_id,
+                                    32,
+                                    manager_handle_clone,
+                                    game_engine,
+                                    requested_twitch_channel.clone(),
+                                    self.twitch_chat_manager_handle.clone(),
+                                );
                         }
                         unknown => {
                             tracing::warn!(

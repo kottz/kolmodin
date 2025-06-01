@@ -15,10 +15,12 @@ pub use messages::{ClientToServerMessage, ServerToClientMessage}; // These are n
 pub mod deal_no_deal;
 mod game_two_echo; // Example
 mod hello_world_game; // Example // Your DND game
+pub mod med_andra_ord;
 
 pub use deal_no_deal::DealNoDealGame;
 pub use game_two_echo::GameTwoEcho;
 pub use hello_world_game::HelloWorldGame;
+pub use med_andra_ord::MedAndraOrdGameState;
 
 pub trait GameLogic: Send + Sync + Debug {
     fn client_connected(

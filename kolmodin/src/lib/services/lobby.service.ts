@@ -21,6 +21,12 @@ export const lobbyService = {
 				name: 'Deal or No Deal',
 				description: 'Beat the banker in this classic TV show game.'
 			},
+			{
+				id: 'MedAndraOrd',
+				name: 'Med Andra Ord',
+				description:
+					'Swedish word guessing game where the admin describes words and players guess them in chat'
+			},
 			{ id: 'HelloWorldGame', name: 'Hello World Echo', description: 'A simple echo test game.' }
 			// Add other game types your server supports by their game_type_id
 		]);
