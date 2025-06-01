@@ -75,6 +75,7 @@ struct LobbyActor<G: GameLogic + Send + 'static> {
     manager_handle: LobbyManagerHandle, // LobbyManager, not TwitchChatManager
 
     twitch_channel_name: Option<String>,
+    twitch_status_receiver: Option<watch::Receiver<TwitchChannelConnectionStatus>>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     _twitch_message_task_handle: Option<tokio::task::JoinHandle<()>>,
     _twitch_status_task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -97,6 +98,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             manager_handle,
             twitch_channel_name,
             twitch_chat_manager_handle,
+            twitch_status_receiver: None,
             _twitch_message_task_handle: None,
             _twitch_status_task_handle: None,
         }
@@ -289,7 +291,42 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
 
     // Send initial status when client connects
     async fn send_current_twitch_status_to_client(&self, client_id: Uuid) {
-        let (status_type, details) = if self.twitch_channel_name.is_some() {
+        let (status_type, details) = if let Some(ref status_rx) = self.twitch_status_receiver {
+            // Get the actual current status from the receiver
+            let current_status = status_rx.borrow().clone();
+            match &current_status {
+                TwitchChannelConnectionStatus::Initializing => (
+                    "Initializing".to_string(),
+                    Some("Checking connection...".to_string()),
+                ),
+                TwitchChannelConnectionStatus::Connecting { attempt } => (
+                    "Connecting".to_string(),
+                    Some(format!("Attempt {}", attempt)),
+                ),
+                TwitchChannelConnectionStatus::Authenticating { attempt } => (
+                    "Authenticating".to_string(),
+                    Some(format!("Attempt {}", attempt)),
+                ),
+                TwitchChannelConnectionStatus::Connected => ("Connected".to_string(), None),
+                TwitchChannelConnectionStatus::Reconnecting {
+                    reason,
+                    failed_attempt,
+                    retry_in,
+                } => (
+                    "Reconnecting".to_string(),
+                    Some(format!(
+                        "Attempt {} failed: {}. Retry in {}s",
+                        failed_attempt,
+                        reason,
+                        retry_in.as_secs()
+                    )),
+                ),
+                TwitchChannelConnectionStatus::Disconnected { reason } => {
+                    ("Disconnected".to_string(), Some(reason.clone()))
+                }
+                TwitchChannelConnectionStatus::Terminated => ("Terminated".to_string(), None),
+            }
+        } else if self.twitch_channel_name.is_some() {
             (
                 "Initializing".to_string(),
                 Some("Checking connection...".to_string()),
@@ -366,6 +403,7 @@ async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                     actor.lobby_id,
                     channel_name
                 );
+                actor.twitch_status_receiver = Some(status_receiver.clone());
                 twitch_status_rx_option = Some(status_receiver);
             }
             Err(e) => {
