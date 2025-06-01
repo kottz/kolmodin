@@ -3,9 +3,8 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
-use tokio::task::JoinHandle;
-use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use crate::game_logic::GameLogic;
@@ -16,7 +15,7 @@ use crate::game_logic::messages::{
 use crate::twitch_integration::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_MED_ANDRA_ORD: &str = "MedAndraOrd";
-const ROUND_DURATION_SECONDS: u32 = 60;
+const ROUND_DURATION_SECONDS: u64 = 60;
 
 // Static list of Swedish words that are fun to describe
 const SWEDISH_WORDS: &[&str] = &[
@@ -50,7 +49,6 @@ pub enum GameEvent {
     WordChanged { word: String },
     PlayerScored { player: String, points: u32 },
     GamePhaseChanged { new_phase: GamePhase },
-    TimerUpdate { seconds_remaining: u32 },
 }
 
 // Game Phases
@@ -71,14 +69,14 @@ pub struct MedAndraOrdGameState {
     pub phase: GamePhase,
     pub target_points: u32,
     pub player_scores: HashMap<String, u32>,
-    pub timer_seconds_remaining: u32,
+    pub round_duration_seconds: u64, // Send to client
 
     #[serde(skip)]
     words: Vec<String>,
     #[serde(skip)]
     used_words: HashSet<String>,
     #[serde(skip)]
-    timer_handle: Option<JoinHandle<()>>,
+    round_start_time: Option<Instant>,
 }
 
 impl Clone for MedAndraOrdGameState {
@@ -88,10 +86,10 @@ impl Clone for MedAndraOrdGameState {
             phase: self.phase.clone(),
             target_points: self.target_points,
             player_scores: self.player_scores.clone(),
-            timer_seconds_remaining: self.timer_seconds_remaining,
+            round_duration_seconds: self.round_duration_seconds,
             words: self.words.clone(),
             used_words: self.used_words.clone(),
-            timer_handle: None, // Don't clone timer handle
+            round_start_time: self.round_start_time,
         }
     }
 }
@@ -105,10 +103,10 @@ impl MedAndraOrdGameState {
             phase: GamePhase::Setup,
             target_points: 10,
             player_scores: HashMap::new(),
-            timer_seconds_remaining: ROUND_DURATION_SECONDS,
+            round_duration_seconds: ROUND_DURATION_SECONDS,
             words,
             used_words: HashSet::new(),
-            timer_handle: None,
+            round_start_time: None,
         }
     }
 
@@ -193,13 +191,14 @@ impl MedAndraOrdGameState {
 
         self.used_words.clear();
         self.player_scores.clear();
-        self.timer_seconds_remaining = ROUND_DURATION_SECONDS;
+
+        // Record start time for server-side validation
+        self.round_start_time = Some(Instant::now());
 
         if let Some(word) = self.get_next_word() {
             self.phase = GamePhase::Playing {
                 current_word: word.clone(),
             };
-            self.start_timer().await;
             self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
                 .await;
             self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
@@ -215,6 +214,10 @@ impl MedAndraOrdGameState {
                 self.phase = GamePhase::Playing {
                     current_word: word.clone(),
                 };
+
+                // Reset timer for the new word
+                self.round_start_time = Some(Instant::now());
+
                 self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
                     .await;
                 self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
@@ -226,15 +229,27 @@ impl MedAndraOrdGameState {
     }
 
     async fn handle_reset_game(&mut self) {
-        self.stop_timer().await;
         self.phase = GamePhase::Setup;
         self.player_scores.clear();
         self.used_words.clear();
-        self.timer_seconds_remaining = ROUND_DURATION_SECONDS;
+        self.round_start_time = None;
         self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
             new_phase: self.phase.clone(),
         })
         .await;
+    }
+
+    // Check if the guess is within the time limit
+    fn is_guess_within_time_limit(&self) -> bool {
+        let elapsed = match self.round_start_time {
+            Some(start_time) => start_time.elapsed(),
+            None => {
+                tracing::warn!("Round start time not set");
+                return false;
+            }
+        };
+
+        elapsed.as_secs() <= self.round_duration_seconds
     }
 
     fn handle_set_target_points(&mut self, points: u32) {
@@ -272,7 +287,7 @@ impl MedAndraOrdGameState {
 
         // Check if player won
         if current_score >= self.target_points {
-            self.stop_timer().await;
+            self.round_start_time = None;
             self.phase = GamePhase::GameOver {
                 winner: player.to_string(),
             };
@@ -296,21 +311,6 @@ impl MedAndraOrdGameState {
             .await;
         }
     }
-
-    async fn start_timer(&mut self) {
-        self.stop_timer().await;
-        self.timer_seconds_remaining = ROUND_DURATION_SECONDS;
-
-        // Note: In a real implementation, you'd need to handle the timer properly
-        // This is a simplified version - you might need to use Arc<Mutex<>> for shared state
-        // and send updates through a channel
-    }
-
-    async fn stop_timer(&mut self) {
-        if let Some(handle) = self.timer_handle.take() {
-            handle.abort();
-        }
-    }
 }
 
 impl GameLogic for MedAndraOrdGameState {
@@ -329,7 +329,7 @@ impl GameLogic for MedAndraOrdGameState {
         self.clients.remove(&client_id);
     }
 
-    async fn handle_event(&mut self, client_id: Uuid, message: GenericClientToServerMessage) {
+    async fn handle_event(&mut self, _client_id: Uuid, message: GenericClientToServerMessage) {
         match message {
             GenericClientToServerMessage::GameSpecificCommand {
                 game_type_id,
@@ -357,7 +357,10 @@ impl GameLogic for MedAndraOrdGameState {
                     }
                 }
             }
-            GenericClientToServerMessage::GlobalCommand { command_name, data } => {
+            GenericClientToServerMessage::GlobalCommand {
+                command_name,
+                data: _,
+            } => {
                 tracing::trace!("MedAndraOrd: Received GlobalCommand: {}", command_name);
             }
             _ => {
@@ -375,6 +378,15 @@ impl GameLogic for MedAndraOrdGameState {
 
         // Process Twitch chat messages based on game phase
         if let GamePhase::Playing { current_word } = &self.phase {
+            // Server-side validation: check if guess is within time limit
+            if !self.is_guess_within_time_limit() {
+                tracing::info!(
+                    "MedAndraOrd: Guess from {} ignored - round time expired",
+                    message.sender_username
+                );
+                return;
+            }
+
             let guess = message.text.trim().to_lowercase();
             let target_word = current_word.to_lowercase();
 

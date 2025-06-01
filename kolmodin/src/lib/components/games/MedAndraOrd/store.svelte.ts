@@ -18,12 +18,16 @@ function createInitialMedAndraOrdState(): MedAndraOrdGameState {
 		phase: { type: 'Setup' },
 		target_points: 10,
 		player_scores: {},
-		timer_seconds_remaining: 60
+		round_duration_seconds: 60 // Default, will be updated from server
 	};
 }
 
 function createMedAndraOrdStore() {
 	const gameState = $state<MedAndraOrdGameState>(createInitialMedAndraOrdState());
+
+	// Client-side timer
+	let timerInterval: number | null = null;
+	let clientTimer = $state(60);
 
 	// Derived state for leaderboard (sorted by points descending)
 	const leaderboard = $derived(() => {
@@ -48,6 +52,31 @@ function createMedAndraOrdStore() {
 		return null;
 	});
 
+	// Display timer - use client timer during game, server timer otherwise
+	const displayTimer = $derived(() => {
+		return gameState.phase.type === 'Playing' ? clientTimer : 60;
+	});
+
+	function startClientTimer() {
+		stopClientTimer();
+		clientTimer = 60;
+
+		timerInterval = setInterval(() => {
+			clientTimer--;
+			if (clientTimer <= 0) {
+				stopClientTimer();
+				info('MedAndraOrdStore: Client timer expired');
+			}
+		}, 1000);
+	}
+
+	function stopClientTimer() {
+		if (timerInterval) {
+			clearInterval(timerInterval);
+			timerInterval = null;
+		}
+	}
+
 	function processEvent(eventPayload: GameEventData): void {
 		debug(`MedAndraOrdStore: Processing event "${eventPayload.event_type}"`);
 
@@ -59,7 +88,7 @@ function createMedAndraOrdStore() {
 
 			case 'WordChanged':
 				info(`MedAndraOrdStore: Word changed to: ${eventPayload.data.word}`);
-				// The word change is handled through FullStateUpdate or GamePhaseChanged
+				// Don't restart timer - it keeps running from game start
 				break;
 
 			case 'PlayerScored':
@@ -71,11 +100,15 @@ function createMedAndraOrdStore() {
 
 			case 'GamePhaseChanged':
 				info(`MedAndraOrdStore: Game phase changed to: ${eventPayload.data.new_phase.type}`);
+				const previousPhase = gameState.phase.type;
 				gameState.phase = eventPayload.data.new_phase;
-				break;
 
-			case 'TimerUpdate':
-				gameState.timer_seconds_remaining = eventPayload.data.seconds_remaining;
+				// Start client timer only when first entering Playing phase
+				if (previousPhase !== 'Playing' && eventPayload.data.new_phase.type === 'Playing') {
+					startClientTimer();
+				} else if (eventPayload.data.new_phase.type !== 'Playing') {
+					stopClientTimer();
+				}
 				break;
 
 			default:
@@ -118,6 +151,9 @@ function createMedAndraOrdStore() {
 		},
 		get winner() {
 			return winner;
+		},
+		get displayTimer() {
+			return displayTimer;
 		},
 		actions
 	};

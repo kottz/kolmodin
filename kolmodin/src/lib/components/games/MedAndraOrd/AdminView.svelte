@@ -16,10 +16,10 @@
 	const leaderboard = $derived(medAndraOrdStore.leaderboard);
 	const currentWord = $derived(medAndraOrdStore.currentWord);
 	const winner = $derived(medAndraOrdStore.winner);
+	const displayTimer = $derived(medAndraOrdStore.displayTimer);
 	const currentPhase = $derived(gameState.phase.type);
-	const timerSecondsRemaining = $derived(gameState.timer_seconds_remaining);
 
-	let targetPointsInput = $derived(gameState.target_points.toString());
+	let targetPointsInput = $state(gameState.target_points.toString());
 
 	// Update input when game state changes
 	$effect(() => {
@@ -56,8 +56,7 @@
 							{currentWord() || 'Loading...'}
 						</div>
 						<div class="text-muted-foreground text-2xl">
-							Time: {formatTime(timerSecondsRemaining)}
-							Time: {timerSecondsRemaining}
+							Time: {formatTime(displayTimer())}
 						</div>
 						<p class="text-muted-foreground mt-2 text-sm">
 							Describe this word to your Twitch chat! First correct guess wins a point.
@@ -149,10 +148,8 @@
 						{#if currentPhase === 'Playing'}
 							<div class="flex justify-between">
 								<span class="text-muted-foreground text-sm">Time Left:</span>
-								<Badge
-									variant={gameState.timer_seconds_remaining <= 10 ? 'destructive' : 'default'}
-								>
-									{formatTime(gameState.timer_seconds_remaining)}
+								<Badge variant={displayTimer() <= 10 ? 'destructive' : 'default'}>
+									{formatTime(displayTimer())}
 								</Badge>
 							</div>
 						{/if}
