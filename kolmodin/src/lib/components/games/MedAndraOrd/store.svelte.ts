@@ -11,7 +11,7 @@ interface MedAndraOrdStoreActions {
 	passWord: () => void;
 	resetGame: () => void;
 	setTargetPoints: (points: number) => void;
-	setGameTimeLimit: (minutes: number) => void;
+	setRoundDuration: (seconds: number) => void;
 	setPointLimitEnabled: (enabled: boolean) => void;
 	setTimeLimitEnabled: (enabled: boolean) => void;
 }
@@ -20,22 +20,19 @@ function createInitialMedAndraOrdState(): MedAndraOrdGameState {
 	return {
 		phase: { type: 'Setup' },
 		target_points: 10,
-		game_time_limit_minutes: 5,
+		round_duration_seconds: 60,
 		point_limit_enabled: true,
-		time_limit_enabled: true,
-		player_scores: {},
-		round_duration_seconds: 60 // Fixed at 60 seconds per word
+		time_limit_enabled: false,
+		player_scores: {}
 	};
 }
 
 function createMedAndraOrdStore() {
 	const gameState = $state<MedAndraOrdGameState>(createInitialMedAndraOrdState());
 
-	// Client-side timers
-	let wordTimerInterval: number | null = null;
-	let gameTimerInterval: number | null = null;
-	let clientWordTimer = $state(60);
-	let clientGameTimer = $state(300); // 5 minutes in seconds
+	// Client-side timer
+	let timerInterval: number | null = null;
+	let clientTimer = $state(60);
 
 	// Derived state for leaderboard (sorted by points descending)
 	const leaderboard = $derived(() => {
@@ -60,62 +57,28 @@ function createMedAndraOrdStore() {
 		return null;
 	});
 
-	// Game end reason
-	const gameEndReason = $derived(() => {
-		if (gameState.phase.type === 'GameOver') {
-			return gameState.phase.data.reason;
-		}
-		return null;
+	// Display timer
+	const displayTimer = $derived(() => {
+		return gameState.phase.type === 'Playing' ? clientTimer : gameState.round_duration_seconds;
 	});
 
-	// Display timers
-	const displayWordTimer = $derived(() => {
-		return gameState.phase.type === 'Playing' ? clientWordTimer : 60;
-	});
+	function startClientTimer() {
+		stopClientTimer();
+		clientTimer = gameState.round_duration_seconds;
 
-	const displayGameTimer = $derived(() => {
-		return gameState.phase.type === 'Playing'
-			? clientGameTimer
-			: gameState.game_time_limit_minutes * 60;
-	});
-
-	function startClientWordTimer() {
-		stopClientWordTimer();
-		clientWordTimer = 60; // Always 60 seconds per word
-
-		wordTimerInterval = setInterval(() => {
-			clientWordTimer--;
-			if (clientWordTimer <= 0) {
-				stopClientWordTimer();
-				info('MedAndraOrdStore: Client word timer expired');
+		timerInterval = setInterval(() => {
+			clientTimer--;
+			if (clientTimer <= 0) {
+				stopClientTimer();
+				info('MedAndraOrdStore: Client timer expired');
 			}
 		}, 1000);
 	}
 
-	function stopClientWordTimer() {
-		if (wordTimerInterval) {
-			clearInterval(wordTimerInterval);
-			wordTimerInterval = null;
-		}
-	}
-
-	function startClientGameTimer() {
-		stopClientGameTimer();
-		clientGameTimer = gameState.game_time_limit_minutes * 60;
-
-		gameTimerInterval = setInterval(() => {
-			clientGameTimer--;
-			if (clientGameTimer <= 0) {
-				stopClientGameTimer();
-				info('MedAndraOrdStore: Client game timer expired');
-			}
-		}, 1000);
-	}
-
-	function stopClientGameTimer() {
-		if (gameTimerInterval) {
-			clearInterval(gameTimerInterval);
-			gameTimerInterval = null;
+	function stopClientTimer() {
+		if (timerInterval) {
+			clearInterval(timerInterval);
+			timerInterval = null;
 		}
 	}
 
@@ -130,8 +93,8 @@ function createMedAndraOrdStore() {
 
 			case 'WordChanged':
 				info(`MedAndraOrdStore: Word changed to: ${eventPayload.data.word}`);
-				// Restart word timer but keep game timer running
-				startClientWordTimer();
+				// Restart timer for new word
+				startClientTimer();
 				break;
 
 			case 'PlayerScored':
@@ -146,18 +109,12 @@ function createMedAndraOrdStore() {
 				const previousPhase = gameState.phase.type;
 				gameState.phase = eventPayload.data.new_phase;
 
-				// Start client timers only when first entering Playing phase
+				// Start client timer only when first entering Playing phase
 				if (previousPhase !== 'Playing' && eventPayload.data.new_phase.type === 'Playing') {
-					startClientWordTimer();
-					startClientGameTimer();
+					startClientTimer();
 				} else if (eventPayload.data.new_phase.type !== 'Playing') {
-					stopClientWordTimer();
-					stopClientGameTimer();
+					stopClientTimer();
 				}
-				break;
-
-			case 'GameTimeUpdate':
-				clientGameTimer = eventPayload.data.seconds_remaining;
 				break;
 
 			default:
@@ -168,10 +125,10 @@ function createMedAndraOrdStore() {
 	function sendCommand(
 		command: MedAndraOrdCommandData['command'],
 		points?: number,
-		minutes?: number,
+		seconds?: number,
 		enabled?: boolean
 	): void {
-		const commandData: MedAndraOrdCommandData = { command, points, minutes, enabled };
+		const commandData: MedAndraOrdCommandData = { command, points, seconds, enabled };
 		const payload: GameSpecificCommandPayload = {
 			game_type_id: GAME_TYPE_ID,
 			command_data: commandData
@@ -188,7 +145,7 @@ function createMedAndraOrdStore() {
 		passWord: () => sendCommand('PassWord'),
 		resetGame: () => sendCommand('ResetGame'),
 		setTargetPoints: (points: number) => sendCommand('SetTargetPoints', points),
-		setGameTimeLimit: (minutes: number) => sendCommand('SetGameTimeLimit', undefined, minutes),
+		setRoundDuration: (seconds: number) => sendCommand('SetRoundDuration', undefined, seconds),
 		setPointLimitEnabled: (enabled: boolean) =>
 			sendCommand('SetPointLimitEnabled', undefined, undefined, enabled),
 		setTimeLimitEnabled: (enabled: boolean) =>
@@ -211,14 +168,8 @@ function createMedAndraOrdStore() {
 		get winner() {
 			return winner;
 		},
-		get gameEndReason() {
-			return gameEndReason;
-		},
-		get displayWordTimer() {
-			return displayWordTimer;
-		},
-		get displayGameTimer() {
-			return displayGameTimer;
+		get displayTimer() {
+			return displayTimer;
 		},
 		actions
 	};

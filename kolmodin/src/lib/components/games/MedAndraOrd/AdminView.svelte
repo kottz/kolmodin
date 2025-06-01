@@ -16,23 +16,13 @@
 	const leaderboard = $derived(medAndraOrdStore.leaderboard);
 	const currentWord = $derived(medAndraOrdStore.currentWord);
 	const winner = $derived(medAndraOrdStore.winner);
-	const gameEndReason = $derived(medAndraOrdStore.gameEndReason);
-	const displayWordTimer = $derived(medAndraOrdStore.displayWordTimer);
-	const displayGameTimer = $derived(medAndraOrdStore.displayGameTimer);
+	const displayTimer = $derived(medAndraOrdStore.displayTimer);
 	const currentPhase = $derived(gameState.phase.type);
 
-	let targetPointsInput = $state(gameState.target_points.toString());
-	let gameTimeLimitInput = $state(gameState.game_time_limit_minutes.toString());
-	let pointLimitEnabled = $state(gameState.point_limit_enabled);
-	let timeLimitEnabled = $state(gameState.time_limit_enabled);
-
-	// Update inputs when game state changes
-	$effect(() => {
-		targetPointsInput = gameState.target_points.toString();
-		gameTimeLimitInput = gameState.game_time_limit_minutes.toString();
-		pointLimitEnabled = gameState.point_limit_enabled;
-		timeLimitEnabled = gameState.time_limit_enabled;
-	});
+	let targetPointsInput = $state('10');
+	let roundDurationInput = $state('60');
+	let pointLimitEnabled = $state(true);
+	let timeLimitEnabled = $state(false);
 
 	function handleSetTargetPoints() {
 		const points = parseInt(targetPointsInput);
@@ -41,10 +31,10 @@
 		}
 	}
 
-	function handleSetGameTimeLimit() {
-		const minutes = parseInt(gameTimeLimitInput);
-		if (!isNaN(minutes) && minutes > 0) {
-			medAndraOrdStore.actions.setGameTimeLimit(minutes);
+	function handleSetRoundDuration() {
+		const seconds = parseInt(roundDurationInput);
+		if (!isNaN(seconds) && seconds > 0) {
+			medAndraOrdStore.actions.setRoundDuration(seconds);
 		}
 	}
 
@@ -54,15 +44,6 @@
 
 	function handleTimeLimitToggle() {
 		medAndraOrdStore.actions.setTimeLimitEnabled(timeLimitEnabled);
-	}
-
-	function getGameEndMessage(): string {
-		if (gameEndReason === 'points') {
-			return `${winner()} reached ${gameState.target_points} points!`;
-		} else if (gameEndReason === 'time') {
-			return `Time's up! ${winner() ? `${winner()} wins!` : 'No winner this round.'}`;
-		}
-		return `${winner()} wins!`;
 	}
 
 	function formatTime(seconds: number): string {
@@ -89,32 +70,21 @@
 						<div class="text-primary mb-4 font-mono text-6xl font-bold">
 							{currentWord() || 'Loading...'}
 						</div>
-						<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-							<div class="text-muted-foreground text-xl">
-								Word Time: {formatTime(displayWordTimer())}
+						{#if timeLimitEnabled}
+							<div class="text-muted-foreground text-2xl">
+								Time: {formatTime(displayTimer())}
 							</div>
-							{#if timeLimitEnabled}
-								<div class="text-muted-foreground text-xl">
-									Game Time: {formatTime(displayGameTimer())}
-								</div>
-							{/if}
-						</div>
+						{/if}
 						<p class="text-muted-foreground mt-2 text-sm">
 							Describe this word to your Twitch chat! First correct guess wins a point.
 						</p>
 					{:else if currentPhase === 'GameOver'}
 						<h2 class="text-4xl font-bold text-green-600">Game Over!</h2>
 						<div class="mt-4 text-3xl font-bold">
-							🎉 {getGameEndMessage()} 🎉
+							🎉 Winner: {winner()} 🎉
 						</div>
 						<p class="text-muted-foreground mt-2 text-lg">
-							{#if gameEndReason === 'points'}
-								Target points reached!
-							{:else if gameEndReason === 'time'}
-								Time limit reached!
-							{:else}
-								Game completed!
-							{/if}
+							Congratulations on reaching {gameState.target_points} points!
 						</p>
 					{/if}
 				</CardContent>
@@ -133,14 +103,12 @@
 						{#if currentPhase === 'Setup'}
 							<!-- Point Limit Settings -->
 							<div class="space-y-3">
-								<div class="flex items-center space-x-2">
-									<Checkbox
-										id="point-limit-enabled"
-										bind:checked={pointLimitEnabled}
-										onCheckedChange={handlePointLimitToggle}
-									/>
-									<span>Target Points</span>
-								</div>
+								<Checkbox
+									id="point-limit-enabled"
+									label="Point Limit"
+									bind:checked={pointLimitEnabled}
+									onCheckedChange={handlePointLimitToggle}
+								/>
 								<div class="space-y-2">
 									<div class="flex gap-2">
 										<Input
@@ -167,28 +135,26 @@
 
 							<!-- Time Limit Settings -->
 							<div class="space-y-3">
-								<div class="flex items-center space-x-2">
-									<Checkbox
-										id="time-limit-enabled"
-										bind:checked={timeLimitEnabled}
-										onCheckedChange={handleTimeLimitToggle}
-									/>
-									<span>Time Limit</span>
-								</div>
+								<Checkbox
+									id="time-limit-enabled"
+									label="Time Limit"
+									bind:checked={timeLimitEnabled}
+									onCheckedChange={handleTimeLimitToggle}
+								/>
 								<div class="space-y-2">
 									<div class="flex gap-2">
 										<Input
-											id="game-time-limit"
+											id="round-duration"
 											type="number"
-											min="1"
-											max="60"
-											bind:value={gameTimeLimitInput}
-											placeholder="5"
+											min="10"
+											max="300"
+											bind:value={roundDurationInput}
+											placeholder="60"
 											class="flex-1"
 											disabled={!timeLimitEnabled}
 										/>
 										<Button
-											onclick={handleSetGameTimeLimit}
+											onclick={handleSetRoundDuration}
 											variant="outline"
 											size="sm"
 											disabled={!timeLimitEnabled}
@@ -242,9 +208,9 @@
 						{/if}
 						{#if timeLimitEnabled}
 							<div class="flex justify-between">
-								<span class="text-muted-foreground text-sm">Game Time Limit:</span>
+								<span class="text-muted-foreground text-sm">Round Duration:</span>
 								<Badge variant="secondary">
-									{gameState.game_time_limit_minutes} min
+									{gameState.round_duration_seconds}s
 								</Badge>
 							</div>
 						{/if}
@@ -255,17 +221,11 @@
 							</Badge>
 						</div>
 						{#if currentPhase === 'Playing'}
-							<div class="flex justify-between">
-								<span class="text-muted-foreground text-sm">Word Time:</span>
-								<Badge variant={displayWordTimer() <= 10 ? 'destructive' : 'default'}>
-									{formatTime(displayWordTimer())}
-								</Badge>
-							</div>
 							{#if timeLimitEnabled}
 								<div class="flex justify-between">
-									<span class="text-muted-foreground text-sm">Game Time:</span>
-									<Badge variant={displayGameTimer() <= 60 ? 'destructive' : 'default'}>
-										{formatTime(displayGameTimer())}
+									<span class="text-muted-foreground text-sm">Time Left:</span>
+									<Badge variant={displayTimer() <= 10 ? 'destructive' : 'default'}>
+										{formatTime(displayTimer())}
 									</Badge>
 								</div>
 							{/if}
