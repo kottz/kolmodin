@@ -1,7 +1,20 @@
+// src/lib/components/games/MedAndraOrd/store.svelte.ts
+
 import { registerGameStore } from '$lib/services/game.event.router';
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
 import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
 import type { MedAndraOrdGameState, GameEventData, MedAndraOrdCommandData } from './types';
+import type {
+	StreamableGameStore,
+	StreamEvent,
+	BasePublicGameState
+} from '$lib/types/stream.types';
+import {
+	StreamEventManager,
+	createStreamEvent,
+	createPublicStateFilter,
+	createPublicLeaderboard
+} from '$lib/utils/stream.utils';
 import { debug, warn, info } from '$lib/utils/logger';
 
 const GAME_TYPE_ID = 'MedAndraOrd'; // Must match Rust GAME_TYPE_ID
@@ -14,6 +27,18 @@ interface MedAndraOrdStoreActions {
 	setGameDuration: (seconds: number) => void;
 	setPointLimitEnabled: (enabled: boolean) => void;
 	setTimeLimitEnabled: (enabled: boolean) => void;
+}
+
+// Define public state structure for streaming
+interface MedAndraOrdPublicState extends BasePublicGameState {
+	phase: { type: string; data?: any };
+	targetPoints: number;
+	gameDurationSeconds: number;
+	pointLimitEnabled: boolean;
+	timeLimitEnabled: boolean;
+	leaderboard: Array<{ player: string; points: number; rank: number }>;
+	playersCount: number;
+	timeRemaining?: number; // Only when game is active and time limit enabled
 }
 
 function createInitialMedAndraOrdState(): MedAndraOrdGameState {
@@ -29,6 +54,7 @@ function createInitialMedAndraOrdState(): MedAndraOrdGameState {
 
 function createMedAndraOrdStore() {
 	const gameState = $state<MedAndraOrdGameState>(createInitialMedAndraOrdState());
+	const streamEventManager = new StreamEventManager(10);
 
 	// Client-side game timer (counts down total game time)
 	let timerInterval: number | null = null;
@@ -78,6 +104,16 @@ function createMedAndraOrdStore() {
 		if (gameState.time_limit_enabled) {
 			timerInterval = setInterval(() => {
 				clientTimer--;
+
+				// Add time warning events
+				if (clientTimer === 30 || clientTimer === 10 || clientTimer === 5) {
+					streamEventManager.addEvent(
+						'TIME_WARNING',
+						{ remainingSeconds: clientTimer, message: `${clientTimer} seconds remaining!` },
+						2000
+					);
+				}
+
 				if (clientTimer <= 0) {
 					stopGameTimer();
 					info('MedAndraOrdStore: Game timer expired');
@@ -98,6 +134,42 @@ function createMedAndraOrdStore() {
 		stopGameTimer();
 		gameTimerStarted = false;
 		clientTimer = gameState.game_duration_seconds;
+	}
+
+	// Implement StreamableGameStore interface
+	function getPublicState(): MedAndraOrdPublicState {
+		const publicLeaderboard = createPublicLeaderboard(gameState.player_scores, 10);
+
+		return {
+			phase: {
+				type: gameState.phase.type,
+				// Don't include the actual word in public state!
+				data: gameState.phase.type === 'Playing' ? { hasWord: true } : gameState.phase.data
+			},
+			targetPoints: gameState.target_points,
+			gameDurationSeconds: gameState.game_duration_seconds,
+			pointLimitEnabled: gameState.point_limit_enabled,
+			timeLimitEnabled: gameState.time_limit_enabled,
+			leaderboard: publicLeaderboard,
+			playersCount: Object.keys(gameState.player_scores).length,
+			...(gameState.phase.type === 'Playing' &&
+				gameState.time_limit_enabled && {
+					timeRemaining: clientTimer
+				})
+		};
+	}
+
+	function getStreamEvents(): StreamEvent[] {
+		return streamEventManager.getEvents();
+	}
+
+	function clearStreamEvents(): void {
+		streamEventManager.clearEvents();
+	}
+
+	function shouldBroadcastUpdate(): boolean {
+		// Always broadcast updates for this game
+		return true;
 	}
 
 	function processEvent(eventPayload: GameEventData): void {
@@ -123,7 +195,8 @@ function createMedAndraOrdStore() {
 
 			case 'WordChanged':
 				info(`MedAndraOrdStore: Word changed to: ${eventPayload.data.word}`);
-				// No timer reset - timer continues counting down
+				// Add stream event for word change (without revealing the word)
+				streamEventManager.addEvent('WORD_CHANGED', { message: 'New word available!' }, 2000);
 				break;
 
 			case 'PlayerScored':
@@ -131,12 +204,48 @@ function createMedAndraOrdStore() {
 					`MedAndraOrdStore: ${eventPayload.data.player} scored! Points: ${eventPayload.data.points}`
 				);
 				gameState.player_scores[eventPayload.data.player] = eventPayload.data.points;
+
+				// Add celebration stream event
+				streamEventManager.addEvent(
+					'PLAYER_SCORED',
+					{
+						player: eventPayload.data.player,
+						points: eventPayload.data.points,
+						message: `🎉 ${eventPayload.data.player} scored! 🎉`
+					},
+					3000
+				);
 				break;
 
 			case 'GamePhaseChanged':
 				info(`MedAndraOrdStore: Game phase changed to: ${eventPayload.data.new_phase.type}`);
 				const previousPhase = gameState.phase.type;
 				gameState.phase = eventPayload.data.new_phase;
+
+				// Add phase change stream event
+				let phaseMessage = '';
+				switch (eventPayload.data.new_phase.type) {
+					case 'Playing':
+						phaseMessage = 'Game Started! Start guessing!';
+						streamEventManager.addEvent('GAME_STARTED', { message: phaseMessage }, 3000);
+						break;
+					case 'GameOver':
+						const winnerName = eventPayload.data.new_phase.data?.winner;
+						phaseMessage = winnerName ? `🏆 ${winnerName} Wins! 🏆` : 'Game Over!';
+						streamEventManager.addEvent(
+							'GAME_ENDED',
+							{
+								winner: winnerName,
+								message: phaseMessage
+							},
+							5000
+						);
+						break;
+					case 'Setup':
+						phaseMessage = 'Setting up new game...';
+						streamEventManager.addEvent('GAME_RESET', { message: phaseMessage }, 2000);
+						break;
+				}
 
 				// Only start timer when transitioning from Setup to Playing
 				if (previousPhase === 'Setup' && eventPayload.data.new_phase.type === 'Playing') {
@@ -193,8 +302,14 @@ function createMedAndraOrdStore() {
 			sendCommand('SetTimeLimitEnabled', undefined, undefined, enabled)
 	};
 
-	// Register with game event router
-	registerGameStore(GAME_TYPE_ID, { processEvent });
+	// Register with game event router, including streaming capabilities
+	registerGameStore(GAME_TYPE_ID, {
+		processEvent,
+		getPublicState,
+		getStreamEvents,
+		clearStreamEvents,
+		shouldBroadcastUpdate
+	});
 
 	return {
 		get gameState() {
@@ -212,6 +327,13 @@ function createMedAndraOrdStore() {
 		get displayTimer() {
 			return displayTimer;
 		},
+
+		// Streaming interface
+		getPublicState,
+		getStreamEvents,
+		clearStreamEvents,
+		shouldBroadcastUpdate,
+
 		actions
 	};
 }

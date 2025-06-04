@@ -1,8 +1,11 @@
+<!-- src/lib/components/games/MedAndraOrd/AdminView.svelte -->
 <script lang="ts">
 	import { medAndraOrdStore } from './store.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Checkbox from '$lib/components/ui/checkbox.svelte';
+	import StreamControls from '$lib/components/ui/StreamControls.svelte';
+	import StreamDemoCard from '$lib/components/ui/StreamDemoCard.svelte';
 	import {
 		Card,
 		CardContent,
@@ -198,6 +201,12 @@
 						{/if}
 					</CardContent>
 				</Card>
+
+				<!-- Stream Controls Card -->
+				<StreamControls />
+
+				<!-- Stream Demo Card (for testing) -->
+				<StreamDemoCard />
 
 				<!-- Game Info -->
 				<Card>

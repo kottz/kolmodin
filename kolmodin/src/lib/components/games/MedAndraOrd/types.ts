@@ -1,3 +1,5 @@
+import type { BasePublicGameState } from '$lib/types/stream.types';
+
 export interface AdminCommand {
 	command:
 		| 'StartGame'
@@ -24,6 +26,18 @@ export interface MedAndraOrdGameState {
 	point_limit_enabled: boolean;
 	time_limit_enabled: boolean;
 	player_scores: Record<string, number>;
+}
+
+// Public state interface for streaming (safe to broadcast)
+export interface MedAndraOrdPublicState extends BasePublicGameState {
+	phase: { type: string; data?: any };
+	targetPoints: number;
+	gameDurationSeconds: number;
+	pointLimitEnabled: boolean;
+	timeLimitEnabled: boolean;
+	leaderboard: Array<{ player: string; points: number; rank: number }>;
+	playersCount: number;
+	timeRemaining?: number; // Only when game is active and time limit enabled
 }
 
 export type GameEventData =

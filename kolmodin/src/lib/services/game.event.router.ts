@@ -1,19 +1,21 @@
-import type { GameSpecificEventPayload } from '$lib/types/websocket.types';
-import { warn, debug } from '$lib/utils/logger';
+// src/lib/services/game.event.router.ts
 
-// Import game-specific stores here as they are created.
-// For now, we'll use placeholders.
-// Example: import { dealNoDealStore } from '$lib/components/games/DealNoDeal/store.svelte';
-// Example: import { helloWorldStore } from '$lib/components/games/HelloWorldGame/store.svelte';
+import type { GameSpecificEventPayload } from '$lib/types/websocket.types';
+import type { StreamableGameStore } from '$lib/types/stream.types';
+import { broadcastService } from './broadcast.service';
+import { warn, debug, info } from '$lib/utils/logger';
 
 // Define an interface for what a game-specific store's event processor should look like.
-// This helps ensure consistency.
-interface GameStoreEventProcessor {
+// Enhanced to include streaming capabilities
+interface GameStoreEventProcessor extends Partial<StreamableGameStore> {
 	processEvent: (eventData: any) => void; // `eventData` will be specific to the game
 }
 
 // This registry will map game_type_id to their respective store's event processor.
 const gameStoreRegistry = new Map<string, GameStoreEventProcessor>();
+
+// Track the currently active game for broadcasting
+let currentActiveGame: string | null = null;
 
 // Function to register a game store's event processor.
 // Game-specific stores will call this when they are initialized.
@@ -27,11 +29,80 @@ export function registerGameStore(gameTypeId: string, store: GameStoreEventProce
 	debug(`Game Event Router: Registered store for game type ID "${gameTypeId}".`);
 }
 
-// Function to unregister a game store (e.g., if a game module is dynamically unloaded, though less common in this setup).
+// Function to unregister a game store
 export function unregisterGameStore(gameTypeId: string): void {
 	if (gameStoreRegistry.has(gameTypeId)) {
 		gameStoreRegistry.delete(gameTypeId);
 		debug(`Game Event Router: Unregistered store for game type ID "${gameTypeId}".`);
+	}
+}
+
+// Set the currently active game (called by UI when game becomes active)
+export function setActiveGame(gameTypeId: string | null): void {
+	if (currentActiveGame !== gameTypeId) {
+		const previousGame = currentActiveGame;
+		currentActiveGame = gameTypeId;
+
+		info(`Game Event Router: Active game changed from ${previousGame} to ${gameTypeId}`);
+
+		// Initialize broadcast service if not already done (admin window)
+		if (!broadcastService.isInitialized() && !broadcastService.getIsStreamWindow()) {
+			broadcastService.initialize(false); // false = admin window
+		}
+
+		// Broadcast game change
+		broadcastService.broadcastGameChanged(gameTypeId);
+
+		// If switching to a new game, broadcast initial state
+		if (gameTypeId && gameStoreRegistry.has(gameTypeId)) {
+			const store = gameStoreRegistry.get(gameTypeId)!;
+			if (store.getPublicState) {
+				const publicState = store.getPublicState();
+				broadcastService.broadcastStateUpdate(gameTypeId, publicState);
+			}
+		}
+	}
+}
+
+// Get the currently active game
+export function getActiveGame(): string | null {
+	return currentActiveGame;
+}
+
+// Broadcast state update for the currently active game
+export function broadcastCurrentGameState(): void {
+	if (!currentActiveGame) {
+		debug('Game Event Router: No active game to broadcast state for');
+		return;
+	}
+
+	const store = gameStoreRegistry.get(currentActiveGame);
+	if (store && store.getPublicState) {
+		if (!store.shouldBroadcastUpdate || store.shouldBroadcastUpdate()) {
+			const publicState = store.getPublicState();
+			broadcastService.broadcastStateUpdate(currentActiveGame, publicState);
+			debug(`Game Event Router: Broadcasted state update for ${currentActiveGame}`);
+		}
+	}
+}
+
+// Broadcast stream events for the currently active game
+export function broadcastCurrentGameEvents(): void {
+	if (!currentActiveGame) {
+		return;
+	}
+
+	const store = gameStoreRegistry.get(currentActiveGame);
+	if (store && store.getStreamEvents) {
+		const events = store.getStreamEvents();
+		events.forEach((event) => {
+			broadcastService.broadcastStreamEvent(currentActiveGame!, event);
+		});
+
+		// Clear events after broadcasting
+		if (store.clearStreamEvents) {
+			store.clearStreamEvents();
+		}
 	}
 }
 
@@ -44,54 +115,40 @@ function routeGameSpecificEvent(payload: GameSpecificEventPayload): void {
 	if (targetStore && typeof targetStore.processEvent === 'function') {
 		try {
 			targetStore.processEvent(event_data);
+
+			// After processing the event, check if we should broadcast updates
+			if (game_type_id === currentActiveGame) {
+				// Small delay to ensure state updates are complete
+				setTimeout(() => {
+					broadcastCurrentGameState();
+					broadcastCurrentGameEvents();
+				}, 0);
+			}
 		} catch (e) {
 			warn(
 				`Game Event Router: Error processing event in store for game type "${game_type_id}":`,
 				e
 			);
-			// Optionally, notify the user or log more extensively
 		}
 	} else {
 		warn(
 			`Game Event Router: No registered store or invalid processEvent method for game type ID "${game_type_id}". Event not routed.`
 		);
-		// You might want to buffer these events or handle them differently if a game store
-		// might register after events for it have already arrived. For now, we'll just warn.
 	}
 }
 
-export const gameEventRouter = {
-	routeGameSpecificEvent
-	// Expose register/unregister if game stores are initialized dynamically outside this file,
-	// otherwise, they can just call the exported registerGameStore function directly.
-	// For simplicity with Svelte stores that auto-initialize on import, direct call is fine.
-};
-
-// --- How Game-Specific Stores Will Use This ---
-// In each `src/lib/components/games/[GameTypeID]/store.svelte.ts`:
-/*
-import { registerGameStore } from '$lib/services/game.event.router';
-import type { SomeGameEventData } from './types';
-
-const GAME_TYPE_ID = 'SomeGame';
-
-function createSomeGameStore() {
-    // ... store state ...
-
-    function processEvent(eventData: SomeGameEventData) {
-        // ... process event and update state ...
-        console.log(`Processing ${GAME_TYPE_ID} event:`, eventData);
-    }
-
-    // ... store actions ...
-
-    // Register this store with the router when the store module is initialized
-    registerGameStore(GAME_TYPE_ID, { processEvent });
-
-    return {
-        // ... exposed state and actions ...
-    };
+// Cleanup function
+export function cleanup(): void {
+	currentActiveGame = null;
+	broadcastService.cleanup();
+	info('Game Event Router: Cleaned up');
 }
 
-export const someGameStore = createSomeGameStore();
-*/
+export const gameEventRouter = {
+	routeGameSpecificEvent,
+	setActiveGame,
+	getActiveGame,
+	broadcastCurrentGameState,
+	broadcastCurrentGameEvents,
+	cleanup
+};
