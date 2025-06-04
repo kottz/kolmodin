@@ -1028,14 +1028,97 @@ async fn connect_and_listen_irc_single_attempt_adapted(
 
     let mut line_buffer = String::new();
 
+    // Connection health monitoring
+    let mut last_server_activity = tokio::time::Instant::now();
+    let mut last_health_check = tokio::time::Instant::now();
+    let mut pending_health_check = false;
+    let mut authenticated = false;
+
+    // Timeouts based on test results
+    let health_check_interval = Duration::from_secs(120); // Send health PING every 2 minutes
+    let health_check_timeout = Duration::from_secs(10); // Expect PONG within 10 seconds
+    let server_activity_timeout = Duration::from_secs(400); // No server activity for 6.67 minutes = dead
+    let read_timeout = Duration::from_secs(5); // Very short read timeout for responsive health checks
+
+    let mut health_check_start_time = tokio::time::Instant::now();
+
     loop {
         line_buffer.clear();
-        match tokio::time::timeout(
-            Duration::from_secs(360),
-            buf_reader.read_line(&mut line_buffer),
-        )
-        .await
-        {
+
+        // After authentication, perform connection health monitoring
+        if authenticated {
+            let now = tokio::time::Instant::now();
+
+            // Check if we should send a health check PING
+            if !pending_health_check
+                && now.duration_since(last_health_check) >= health_check_interval
+            {
+                tracing::debug!(
+                    "[TWITCH][IRC_HEALTH][{}][{}] Sending health check PING",
+                    channel_name,
+                    actor_id_for_logging
+                );
+
+                match writer.write_all(b"PING :health-check\r\n").await {
+                    Ok(_) => {
+                        if let Err(e) = writer.flush().await {
+                            tracing::error!(
+                                "[TWITCH][IRC_HEALTH][{}][{}] Failed to flush health check PING: {}",
+                                channel_name,
+                                actor_id_for_logging,
+                                e
+                            );
+                            return Err(TwitchError::Io(e));
+                        }
+                        pending_health_check = true;
+                        health_check_start_time = now;
+                        last_health_check = now;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[TWITCH][IRC_HEALTH][{}][{}] Failed to send health check PING: {}",
+                            channel_name,
+                            actor_id_for_logging,
+                            e
+                        );
+                        return Err(TwitchError::Io(e));
+                    }
+                }
+            }
+
+            // Check if pending health check has timed out
+            if pending_health_check
+                && now.duration_since(health_check_start_time) >= health_check_timeout
+            {
+                tracing::warn!(
+                    "[TWITCH][IRC_HEALTH][{}][{}] Health check PING timeout - no PONG received in {:?}. Connection dead.",
+                    channel_name,
+                    actor_id_for_logging,
+                    health_check_timeout
+                );
+                return Err(TwitchError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Health check timeout - connection dead",
+                )));
+            }
+
+            // Check if we haven't seen any server activity in too long
+            if now.duration_since(last_server_activity) >= server_activity_timeout {
+                tracing::warn!(
+                    "[TWITCH][IRC_HEALTH][{}][{}] No server activity in {:?}. Connection appears dead.",
+                    channel_name,
+                    actor_id_for_logging,
+                    server_activity_timeout
+                );
+                return Err(TwitchError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "No server activity - connection dead",
+                )));
+            }
+        }
+
+        // Read with short timeout for responsive health checking
+        match tokio::time::timeout(read_timeout, buf_reader.read_line(&mut line_buffer)).await {
             Ok(Ok(0)) => {
                 tracing::info!(
                     "[TWITCH][IRC_READ][{}][{}] Connection closed by Twitch (EOF).",
@@ -1044,7 +1127,9 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 );
                 return Ok(());
             }
-            Ok(Ok(_)) => { /* Process line */ }
+            Ok(Ok(_)) => {
+                // Successfully read a line - process it below
+            }
             Ok(Err(e)) => {
                 tracing::error!(
                     "[TWITCH][IRC_READ][{}][{}] Error reading from chat: {}",
@@ -1055,21 +1140,17 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 return Err(TwitchError::Io(e));
             }
             Err(_) => {
-                tracing::error!(
-                    "[TWITCH][IRC_READ][{}][{}] Timeout reading from socket. Closing connection.",
-                    channel_name,
-                    actor_id_for_logging
-                );
-                return Err(TwitchError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "Read timeout",
-                )));
+                // Read timeout - continue loop to check health and try again
+                continue;
             }
         }
 
         let message_line_owned = line_buffer.clone();
 
+        // Update server activity timestamp for any message
         if !message_line_owned.trim().is_empty() {
+            last_server_activity = tokio::time::Instant::now();
+
             if actor_tx
                 .send(TwitchChannelActorMessage::InternalIrcLineReceived {
                     line: message_line_owned.clone(),
@@ -1091,11 +1172,45 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                     .params
                     .get(0)
                     .unwrap_or(&":tmi.twitch.tv");
+
+                tracing::debug!(
+                    "[TWITCH][IRC_PING][{}][{}] Received server PING, responding with PONG",
+                    channel_name,
+                    actor_id_for_logging
+                );
+
                 writer
                     .write_all(format!("PONG {}\r\n", pong_target).as_bytes())
                     .await
                     .map_err(TwitchError::Io)?;
                 writer.flush().await.map_err(TwitchError::Io)?;
+            }
+            Some("PONG") => {
+                // Check if this is a response to our health check
+                let pong_content = parsed_for_task_logic
+                    .params
+                    .get(1)
+                    .map(|s| &**s)
+                    .unwrap_or("");
+
+                if pending_health_check && pong_content.contains("health-check") {
+                    let response_time =
+                        tokio::time::Instant::now().duration_since(health_check_start_time);
+                    tracing::debug!(
+                        "[TWITCH][IRC_HEALTH][{}][{}] Health check PONG received in {:?}",
+                        channel_name,
+                        actor_id_for_logging,
+                        response_time
+                    );
+                    pending_health_check = false;
+                } else {
+                    tracing::debug!(
+                        "[TWITCH][IRC_PONG][{}][{}] Received PONG (not health check): {}",
+                        channel_name,
+                        actor_id_for_logging,
+                        message_line_owned.trim()
+                    );
+                }
             }
             Some("001") => {
                 tracing::info!(
@@ -1103,6 +1218,9 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                     channel_name,
                     actor_id_for_logging
                 );
+
+                authenticated = true; // Enable health monitoring
+
                 if actor_tx
                     .send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
                         new_status: TwitchChannelConnectionStatus::Connected,
