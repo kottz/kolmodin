@@ -1,7 +1,14 @@
 import { registerGameStore } from '$lib/services/game.event.router';
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
 import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
-import type { DealNoDealGameState, GameEventData, DealNoDealCommandData } from './types';
+import type {
+	DealNoDealGameState,
+	GameEventData,
+	DealNoDealCommandData,
+	DealNoDealPublicState
+} from './types';
+import type { StreamableGameStore, StreamEvent } from '$lib/types/stream.types';
+import { StreamEventManager, createStreamEvent } from '$lib/utils/stream.utils';
 import { debug, warn, info } from '$lib/utils/logger';
 
 const GAME_TYPE_ID = 'DealNoDeal';
@@ -52,7 +59,73 @@ function createDealNoDealStore() {
 	// Add switch/keep votes map
 	const switchKeepVotesMap = $state<SwitchKeepVotesMapType>({ SWITCH: [], KEEP: [] });
 
+	// Stream event manager for broadcasting events
+	const streamEventManager = new StreamEventManager(15);
+
 	info('DealNoDealStore: Initializing store...');
+
+	// Implement StreamableGameStore interface
+	function getPublicState(): DealNoDealPublicState {
+		// Create safe briefcase representation (no values for unopened cases)
+		const publicBriefcases = gameState.briefcase_values.map((value, index) => ({
+			index,
+			isOpened: gameState.briefcase_is_opened[index] || false,
+			...(gameState.briefcase_is_opened[index] && { value }) // Only include value if opened
+		}));
+
+		// Get current round info if in round opening phase
+		let currentRoundInfo;
+		if (gameState.phase.type === 'RoundCaseOpening_Voting') {
+			currentRoundInfo = {
+				roundNumber: gameState.phase.data.round_number,
+				casesToOpen: gameState.phase.data.total_to_open_for_round,
+				casesOpened: gameState.phase.data.opened_so_far_for_round
+			};
+		}
+
+		// Get vote counts based on current phase
+		let voteCounts;
+		if (gameState.phase.type === 'DealOrNoDeal_Voting') {
+			voteCounts = {
+				DEAL: dealNoDealVotesMap.DEAL.length,
+				'NO DEAL': dealNoDealVotesMap['NO DEAL'].length
+			};
+		} else if (gameState.phase.type === 'SwitchOrKeep_Voting') {
+			voteCounts = {
+				SWITCH: switchKeepVotesMap.SWITCH.length,
+				KEEP: switchKeepVotesMap.KEEP.length
+			};
+		}
+
+		// Create a clean, serializable copy of the phase to avoid DataCloneError
+		const cleanPhase = {
+			type: gameState.phase.type,
+			...(gameState.phase.data && { data: JSON.parse(JSON.stringify(gameState.phase.data)) })
+		};
+
+		return {
+			phase: cleanPhase,
+			briefcases: publicBriefcases,
+			playerChosenCaseIndex: gameState.player_chosen_case_index,
+			remainingMoneyValues: [...(gameState.remaining_money_values_in_play || [])],
+			currentRoundInfo,
+			voteCounts,
+			totalCases: gameState.briefcase_values.length
+		};
+	}
+
+	function getStreamEvents(): StreamEvent[] {
+		return streamEventManager.getEvents();
+	}
+
+	function clearStreamEvents(): void {
+		streamEventManager.clearEvents();
+	}
+
+	function shouldBroadcastUpdate(): boolean {
+		// Always broadcast updates for this game
+		return true;
+	}
 
 	function removeUserFromSwitchKeepLists(username: string) {
 		let changed = false;
@@ -129,6 +202,18 @@ function createDealNoDealStore() {
 				if (!dealNoDealVotesMap[dealVote].includes(voterUsername)) {
 					dealNoDealVotesMap[dealVote].push(voterUsername);
 				}
+
+				// Add stream event for voting
+				streamEventManager.addEvent(
+					'VOTE_CAST',
+					{
+						voter: voterUsername,
+						vote: dealVote,
+						message: `${voterUsername} voted ${dealVote}!`
+					},
+					2000
+				);
+
 				info(
 					`DealNoDealStore: dealNoDealVotesMap updated for vote by ${voterUsername}: ${dealVote}. Map:`,
 					JSON.parse(JSON.stringify(dealNoDealVotesMap))
@@ -152,6 +237,18 @@ function createDealNoDealStore() {
 				if (!switchKeepVotesMap[switchKeepVote].includes(voterUsername)) {
 					switchKeepVotesMap[switchKeepVote].push(voterUsername);
 				}
+
+				// Add stream event for voting
+				streamEventManager.addEvent(
+					'VOTE_CAST',
+					{
+						voter: voterUsername,
+						vote: switchKeepVote,
+						message: `${voterUsername} voted ${switchKeepVote}!`
+					},
+					2000
+				);
+
 				info(
 					`DealNoDealStore: switchKeepVotesMap updated for vote by ${voterUsername}: ${switchKeepVote}. Map:`,
 					JSON.parse(JSON.stringify(switchKeepVotesMap))
@@ -173,6 +270,17 @@ function createDealNoDealStore() {
 
 		// If we reach here, it IS a case vote.
 		const newVotedCaseIndex = newVotedCaseNumber - 1;
+
+		// Add stream event for case selection
+		streamEventManager.addEvent(
+			'CASE_SELECTED',
+			{
+				voter: voterUsername,
+				caseNumber: newVotedCaseNumber,
+				message: `${voterUsername} voted for Case #${newVotedCaseNumber}`
+			},
+			2000
+		);
 
 		// 1. Clear player's previous non-case votes (if any).
 		if (removeUserFromDealNoDealLists(voterUsername)) {
@@ -227,21 +335,79 @@ function createDealNoDealStore() {
 				switchKeepVotesMap['SWITCH'] = [];
 				switchKeepVotesMap['KEEP'] = [];
 				info('DealNoDealStore: All vote maps cleared due to FullStateUpdate.');
+
+				// Add phase change stream event
+				const phaseType = eventPayload.data.phase.type;
+				let phaseMessage = '';
+				switch (phaseType) {
+					case 'PlayerCaseSelection_Voting':
+						phaseMessage = '🎯 Choose your lucky case!';
+						break;
+					case 'RoundCaseOpening_Voting':
+						phaseMessage = '📦 Opening cases this round...';
+						break;
+					case 'BankerOfferCalculation':
+						phaseMessage = '🏦 Banker is calculating offer...';
+						break;
+					case 'DealOrNoDeal_Voting':
+						phaseMessage = '🤝 Deal or No Deal decision time!';
+						break;
+					case 'SwitchOrKeep_Voting':
+						phaseMessage = '🔄 Final decision: Switch or Keep?';
+						break;
+					case 'GameOver':
+						phaseMessage = '💰 Final reveal!';
+						break;
+				}
+
+				if (phaseMessage) {
+					streamEventManager.addEvent(
+						'PHASE_CHANGED',
+						{ phase: phaseType, message: phaseMessage },
+						3000
+					);
+				}
 				break;
+
 			case 'PlayerVoteRegistered':
 				info('DealNoDealStore: PlayerVoteRegistered event received:', eventPayload.data);
 				updateLocalVoteDisplay(eventPayload.data.voter_username, eventPayload.data.vote_value);
 				break;
+
 			case 'CaseOpened':
 				info(
 					`DealNoDealStore: CaseOpened event received for case ${eventPayload.data.case_index + 1} with value ${eventPayload.data.value}`
 				);
+
+				// Add dramatic case opening stream event
+				streamEventManager.addEvent(
+					'CASE_OPENED',
+					{
+						caseNumber: eventPayload.data.case_index + 1,
+						value: eventPayload.data.value,
+						isPlayerCase: eventPayload.data.is_player_case_reveal_at_end,
+						message: `📦 Case #${eventPayload.data.case_index + 1} revealed: $${eventPayload.data.value.toLocaleString()}!`
+					},
+					4000
+				);
 				break;
+
 			case 'BankerOfferPresented':
 				info(
 					`DealNoDealStore: BankerOfferPresented event received: ${eventPayload.data.offer_amount}`
 				);
+
+				// Add banker offer stream event
+				streamEventManager.addEvent(
+					'BANKER_OFFER',
+					{
+						amount: eventPayload.data.offer_amount,
+						message: `🏦 Banker offers: $${eventPayload.data.offer_amount.toLocaleString()}!`
+					},
+					5000
+				);
 				break;
+
 			default:
 				warn(`DealNoDealStore: Unhandled event type: ${(eventPayload as any).event_type}`);
 		}
@@ -261,11 +427,28 @@ function createDealNoDealStore() {
 	}
 
 	const actions: DealNoDealStoreActions = {
-		startGame: () => sendCommand('StartGame'),
+		startGame: () => {
+			sendCommand('StartGame');
+			// Add game start stream event
+			streamEventManager.addEvent(
+				'GAME_STARTED',
+				{
+					message: '🎮 Deal or No Deal has started!'
+				},
+				3000
+			);
+		},
 		concludeVotingAndProcess: () => sendCommand('ConcludeVotingAndProcess')
 	};
 
-	registerGameStore(GAME_TYPE_ID, { processEvent });
+	// Register with game event router, including streaming capabilities
+	registerGameStore(GAME_TYPE_ID, {
+		processEvent,
+		getPublicState,
+		getStreamEvents,
+		clearStreamEvents,
+		shouldBroadcastUpdate
+	});
 
 	return {
 		get gameState() {
@@ -280,6 +463,13 @@ function createDealNoDealStore() {
 		get switchKeepVotesMap() {
 			return switchKeepVotesMap;
 		},
+
+		// Streaming interface
+		getPublicState,
+		getStreamEvents,
+		clearStreamEvents,
+		shouldBroadcastUpdate,
+
 		actions
 	};
 }

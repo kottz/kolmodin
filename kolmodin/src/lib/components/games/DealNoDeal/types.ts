@@ -1,3 +1,7 @@
+// src/lib/components/games/DealNoDeal/types.ts
+
+import type { BasePublicGameState } from '$lib/types/stream.types';
+
 export interface AdminCommand {
 	command: 'StartGame' | 'ConcludeVotingAndProcess';
 	// No content needed for these commands as per server
@@ -60,6 +64,25 @@ export interface DealNoDealGameState {
 	cases_opened_in_current_round_segment: number; // u8
 	banker_offer: number | null; // Option<u64>
 	current_vote_tally: Record<string, number> | null; // Option<HashMap<String, u32>> -> Record<string, number> | null
+}
+
+// Public state interface for streaming (safe to broadcast)
+export interface DealNoDealPublicState extends BasePublicGameState {
+	phase: GamePhaseType;
+	briefcases: Array<{
+		index: number;
+		isOpened: boolean;
+		value?: number; // Only present if opened
+	}>;
+	playerChosenCaseIndex: number | null;
+	remainingMoneyValues: number[];
+	currentRoundInfo?: {
+		roundNumber: number;
+		casesToOpen: number;
+		casesOpened: number;
+	};
+	voteCounts?: Record<string, number>; // Vote tallies for current voting phase
+	totalCases: number;
 }
 
 // GameEvent enum from server (client-side representation of event_data)

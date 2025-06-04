@@ -4,30 +4,26 @@
 	import { info, debug } from '$lib/utils/logger';
 	import type { StreamEvent } from '$lib/types/stream.types';
 
-	// Stream-specific game view components will be imported here
-	// import DealNoDealStreamView from '$lib/components/games/DealNoDeal/StreamView.svelte';
-	// import MedAndraOrdStreamView from '$lib/components/games/MedAndraOrd/StreamView.svelte';
+	// Stream-specific game view components
+	import MedAndraOrdStreamView from '$lib/components/games/MedAndraOrd/StreamView.svelte';
+	import DealNoDealStreamView from '$lib/components/games/DealNoDeal/StreamView.svelte';
 
 	const state = $derived(streamStore.state);
 	const displayConfig = $derived(streamStore.displayConfig);
 
-	// This will be implemented when we create game-specific stream views
-	// const gameStreamComponentMap = {
-	// 	DealNoDeal: DealNoDealStreamView,
-	// 	MedAndraOrd: MedAndraOrdStreamView
-	// };
+	// Game component mapping
+	const gameStreamComponentMap = {
+		MedAndraOrd: MedAndraOrdStreamView,
+		DealNoDeal: DealNoDealStreamView
+	};
 
 	let ActiveGameStreamComponent = $derived(getGameStreamComponent(state.currentGameType));
 
 	function getGameStreamComponent(gameTypeId: string | null) {
 		if (!gameTypeId) return null;
 
-		// This will be uncommented when we implement game-specific stream views
-		// const component = gameStreamComponentMap[gameTypeId as keyof typeof gameStreamComponentMap];
-		// return component || null;
-
-		// For now, return null until we implement the stream views
-		return null;
+		const component = gameStreamComponentMap[gameTypeId as keyof typeof gameStreamComponentMap];
+		return component || null;
 	}
 
 	onMount(() => {

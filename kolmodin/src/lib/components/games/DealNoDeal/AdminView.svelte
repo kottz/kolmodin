@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { dealNoDealStore } from './store.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import StreamControls from '$lib/components/ui/StreamControls.svelte';
+	import StreamDemoCard from '$lib/components/ui/StreamDemoCard.svelte';
 	import {
 		Card,
 		CardContent,
@@ -214,6 +216,12 @@
 						<!-- Detailed game state info (round, cases to open, banker offer) removed from here -->
 					</CardContent>
 				</Card>
+
+				<!-- Stream Controls Card -->
+				<StreamControls />
+
+				<!-- Stream Demo Card (for testing) -->
+				<StreamDemoCard />
 			</div>
 
 			<!-- Right Column -->
