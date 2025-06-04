@@ -7,8 +7,8 @@ import type {
 	DealNoDealCommandData,
 	DealNoDealPublicState
 } from './types';
-import type { StreamableGameStore, StreamEvent } from '$lib/types/stream.types';
-import { StreamEventManager, createStreamEvent } from '$lib/utils/stream.utils';
+import type { StreamEvent } from '$lib/types/stream.types';
+import { StreamEventManager } from '$lib/utils/stream.utils';
 import { debug, warn, info } from '$lib/utils/logger';
 
 const GAME_TYPE_ID = 'DealNoDeal';
@@ -322,7 +322,7 @@ function createDealNoDealStore() {
 			JSON.parse(JSON.stringify(eventPayload.data))
 		);
 		switch (eventPayload.event_type) {
-			case 'FullStateUpdate':
+			case 'FullStateUpdate': {
 				Object.assign(gameState, eventPayload.data);
 				info('DealNoDealStore: Full state updated.');
 				info(eventPayload.data);
@@ -368,13 +368,13 @@ function createDealNoDealStore() {
 					);
 				}
 				break;
-
-			case 'PlayerVoteRegistered':
+			}
+			case 'PlayerVoteRegistered': {
 				info('DealNoDealStore: PlayerVoteRegistered event received:', eventPayload.data);
 				updateLocalVoteDisplay(eventPayload.data.voter_username, eventPayload.data.vote_value);
 				break;
-
-			case 'CaseOpened':
+			}
+			case 'CaseOpened': {
 				info(
 					`DealNoDealStore: CaseOpened event received for case ${eventPayload.data.case_index + 1} with value ${eventPayload.data.value}`
 				);
@@ -391,8 +391,8 @@ function createDealNoDealStore() {
 					4000
 				);
 				break;
-
-			case 'BankerOfferPresented':
+			}
+			case 'BankerOfferPresented': {
 				info(
 					`DealNoDealStore: BankerOfferPresented event received: ${eventPayload.data.offer_amount}`
 				);
@@ -407,9 +407,10 @@ function createDealNoDealStore() {
 					5000
 				);
 				break;
-
-			default:
-				warn(`DealNoDealStore: Unhandled event type: ${(eventPayload as any).event_type}`);
+			}
+			default: {
+				warn(`DealNoDealStore: Unhandled event type received`);
+			}
 		}
 	}
 

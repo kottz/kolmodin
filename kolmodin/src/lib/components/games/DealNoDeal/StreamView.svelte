@@ -119,7 +119,7 @@
 	<!-- Money Rain Animation for Big Reveals -->
 	{#if isGameOver}
 		<div class="pointer-events-none absolute inset-0">
-			{#each Array(20) as _, i}
+			{#each Array(20) as _, i (i)}
 				<div
 					class="absolute animate-bounce text-4xl"
 					style="left: {Math.random() * 100}%; animation-delay: {Math.random() *

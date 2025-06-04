@@ -60,7 +60,7 @@
 							<div class="text-center">
 								<h3 class="mb-4 text-2xl font-bold">DEAL</h3>
 								<div class="space-y-2">
-									{#each dealNoDealMap['DEAL'] || [] as player}
+									{#each dealNoDealMap['DEAL'] || [] as player (player)}
 										<div class="text-lg">{player}</div>
 									{/each}
 									{#if !dealNoDealMap['DEAL'] || dealNoDealMap['DEAL'].length === 0}
@@ -81,7 +81,7 @@
 							<div class="text-center">
 								<h3 class="mb-4 text-2xl font-bold">NO DEAL</h3>
 								<div class="space-y-2">
-									{#each dealNoDealMap['NO DEAL'] || [] as player}
+									{#each dealNoDealMap['NO DEAL'] || [] as player (player)}
 										<div class="text-lg">{player}</div>
 									{/each}
 									{#if !dealNoDealMap['NO DEAL'] || dealNoDealMap['NO DEAL'].length === 0}
@@ -97,7 +97,7 @@
 							<div class="text-center">
 								<h3 class="mb-4 text-2xl font-bold">SWITCH</h3>
 								<div class="space-y-2">
-									{#each switchKeepMap['SWITCH'] || [] as player}
+									{#each switchKeepMap['SWITCH'] || [] as player (player)}
 										<div class="text-lg">{player}</div>
 									{/each}
 									{#if !switchKeepMap['SWITCH'] || switchKeepMap['SWITCH'].length === 0}
@@ -122,7 +122,7 @@
 							<div class="text-center">
 								<h3 class="mb-4 text-2xl font-bold">KEEP</h3>
 								<div class="space-y-2">
-									{#each switchKeepMap['KEEP'] || [] as player}
+									{#each switchKeepMap['KEEP'] || [] as player (player)}
 										<div class="text-lg">{player}</div>
 									{/each}
 									{#if !switchKeepMap['KEEP'] || switchKeepMap['KEEP'].length === 0}
