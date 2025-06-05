@@ -38,9 +38,6 @@ async fn main() -> AppResult<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load .env file if present (optional)
-    // dotenvy::dotenv().ok();
-
     // Load Configuration
     let app_settings = load_settings()?;
 

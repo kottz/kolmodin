@@ -1,6 +1,6 @@
 use crate::error::{ConfigError, Result as AppResult};
 use crate::game_logic::GameType;
-use config::{Config, Environment, File, Value, ValueKind};
+use config::{Config, Environment, Value, ValueKind};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 
@@ -40,31 +40,26 @@ pub struct AppSettings {
 }
 
 pub fn load_settings() -> AppResult<AppSettings> {
-    let mut builder = Config::builder()
-        .add_source(
-            Environment::with_prefix("KOLMODIN")
-                .separator("__")
-                .list_separator(",")
-                .with_list_parse_key("admin_password")
-                .with_list_parse_key("server.cors_origins")
-                .try_parsing(true),
-        )
-        .add_source(File::with_name("config").required(false));
-
     // Set default for games.enabled_types
     let default_games: Vec<Value> = GameType::all()
         .iter()
         .map(|game_type| Value::new(None, ValueKind::String(game_type.primary_id().to_string())))
         .collect();
 
-    builder = builder
+    let settings = Config::builder()
+        .add_source(
+            Environment::with_prefix("KOLMODIN")
+                .separator("__")
+                .list_separator(",")
+                .with_list_parse_key("server.cors_origins")
+                .with_list_parse_key("games.enabled_types")
+                .try_parsing(true),
+        )
         .set_default(
             "games.enabled_types",
             Value::new(None, ValueKind::Array(default_games)),
         )
-        .map_err(|e| ConfigError::Load(e.to_string()))?;
-
-    let settings = builder
+        .map_err(|e| ConfigError::Load(e.to_string()))?
         .build()
         .map_err(|e| ConfigError::Load(e.to_string()))?;
 
