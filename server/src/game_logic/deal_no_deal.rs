@@ -423,7 +423,13 @@ impl DealNoDealGame {
                         return;
                     }
 
-                    let cases_to_open_first_round = ROUND_SCHEDULE[0];
+                    let cases_to_open_first_round =
+                        ROUND_SCHEDULE.get(0).copied().unwrap_or_else(|| {
+                            tracing::error!(
+                                "[GAME][DND] ROUND_SCHEDULE is empty - using default value"
+                            );
+                            6 // Default to 6 cases for first round
+                        });
                     if cases_to_open_first_round == 0 {
                         // Special case: immediate offer if first round opens 0 cases
                         self.phase = GamePhase::BankerOfferCalculation { round_number: 1 }; // Display as Round 1 offer
@@ -516,10 +522,19 @@ impl DealNoDealGame {
                     .process_deal_no_deal_votes_from_tally(&final_tally)
                     .unwrap_or(false);
 
-                let p_case_idx = self
-                    .player_chosen_case_index
-                    .expect("Player case index missing during DealOrNoDeal");
-                let p_case_val = self.briefcase_values[p_case_idx];
+                let p_case_idx = match self.player_chosen_case_index {
+                    Some(idx) => idx,
+                    None => {
+                        tracing::error!(
+                            "[GAME][DND] Player case index missing during DealOrNoDeal - defaulting to case 0"
+                        );
+                        0
+                    }
+                };
+                let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
+                    tracing::error!("[GAME][DND] Invalid case index {} during DealOrNoDeal - using default value", p_case_idx);
+                    1000000 // Default to max value as fallback
+                });
 
                 if took_deal {
                     let summary = format!(
@@ -560,8 +575,10 @@ impl DealNoDealGame {
                         return;
                     } else {
                         let next_display_r_num = round_number + 1;
-                        let cases_to_open_next_round =
-                            ROUND_SCHEDULE[self.current_round_schedule_index];
+                        let cases_to_open_next_round = ROUND_SCHEDULE.get(self.current_round_schedule_index).copied().unwrap_or_else(|| {
+                            tracing::error!("[GAME][DND] Invalid round schedule index {} - using default value", self.current_round_schedule_index);
+                            1 // Default to 1 case per round
+                        });
                         let actual_open_for_next_round = std::cmp::min(
                             cases_to_open_next_round,
                             unopened_not_player.len() as u8,
@@ -586,14 +603,28 @@ impl DealNoDealGame {
                     .process_switch_or_keep_votes_from_tally(&final_tally)
                     .unwrap_or(false);
 
-                let p_case_idx = self
-                    .player_chosen_case_index
-                    .expect("Player case index missing during SwitchOrKeep");
-                let p_case_val = self.briefcase_values[p_case_idx];
-                let final_case_val = self.briefcase_values[final_case_index];
+                let p_case_idx = match self.player_chosen_case_index {
+                    Some(idx) => idx,
+                    None => {
+                        tracing::error!(
+                            "[GAME][DND] Player case index missing during SwitchOrKeep - defaulting to case 0"
+                        );
+                        0
+                    }
+                };
+                let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
+                    tracing::error!("[GAME][DND] Invalid case index {} during SwitchOrKeep - using default value", p_case_idx);
+                    1000000 // Default to max value as fallback
+                });
+                let final_case_val = self.briefcase_values.get(final_case_index).copied().unwrap_or_else(|| {
+                    tracing::error!("[GAME][DND] Invalid final case index {} during SwitchOrKeep - using default value", final_case_index);
+                    1000000 // Default to max value as fallback
+                });
 
                 // Open the final case for dramatic effect
-                if !self.briefcase_is_opened[final_case_index] {
+                if final_case_index < self.briefcase_is_opened.len()
+                    && !self.briefcase_is_opened[final_case_index]
+                {
                     self.open_briefcase(final_case_index);
                 }
 
@@ -655,12 +686,22 @@ impl DealNoDealGame {
     }
 
     async fn end_game_no_deal_final_case(&mut self) {
-        let p_case_idx = self
-            .player_chosen_case_index
-            .expect("Player case index missing at end_game_no_deal_final_case");
+        let p_case_idx = match self.player_chosen_case_index {
+            Some(idx) => idx,
+            None => {
+                tracing::error!(
+                    "[GAME][DND] Player case index missing at end_game_no_deal_final_case - defaulting to case 0"
+                );
+                0
+            }
+        };
 
-        let p_case_val = self.briefcase_values[p_case_idx];
-        if !self.briefcase_is_opened[p_case_idx] {
+        let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
+            tracing::error!("[GAME][DND] Invalid case index {} at end_game_no_deal_final_case - using default value", p_case_idx);
+            1000000 // Default to max value as fallback
+        });
+
+        if p_case_idx < self.briefcase_is_opened.len() && !self.briefcase_is_opened[p_case_idx] {
             self.open_briefcase(p_case_idx); // Mark as opened and remove from remaining values
         }
 
