@@ -13,13 +13,12 @@
 	const gameComponentMap = {
 		DealNoDeal: DealNoDealAdminView,
 		MedAndraOrd: MedAndraOrdAdminView
-		// HelloWorldGame: HelloWorldAdminView,
 	};
 
 	// Define a more general type for component constructors if you have many
 	// For Svelte components, `typeof import('*.svelte').default` can be more precise
 	// but for simplicity here, `any` or a union of known components works.
-	type GameAdminComponentConstructor = typeof DealNoDealAdminView; // | typeof HelloWorldAdminView;
+	type GameAdminComponentConstructor = typeof DealNoDealAdminView;
 
 	const activeGameTypeId = $derived(uiStore.state.activeGameTypeIdForUI);
 	const lobbyId = $derived(lobbyStore.state.lobbyId);

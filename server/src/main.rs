@@ -31,8 +31,6 @@ use game_logic::{
     ClientToServerMessage,
     DealNoDealGame,
     GameLogic,
-    GameTwoEcho,
-    HelloWorldGame,
     MedAndraOrdGameState,
     ServerToClientMessage, // For the deserialization helper
     messages as game_messages,
@@ -690,30 +688,6 @@ impl LobbyManagerActor {
                     let actual_game_type_created: String;
 
                     match game_type_str_req.to_lowercase().as_str() {
-                        "game2" | "gametwoecho" => {
-                            let game_engine = GameTwoEcho::new();
-                            actual_game_type_created = game_engine.game_type_id();
-                            lobby_actor_handle = LobbyActorHandle::new_spawned::<GameTwoEcho>(
-                                lobby_id,
-                                32,
-                                manager_handle_clone,
-                                game_engine,
-                                requested_twitch_channel.clone(),
-                                self.twitch_chat_manager_handle.clone(),
-                            );
-                        }
-                        "helloworld" | "default" | "" => {
-                            let game_engine = HelloWorldGame::new();
-                            actual_game_type_created = game_engine.game_type_id();
-                            lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
-                                lobby_id,
-                                32,
-                                manager_handle_clone,
-                                game_engine,
-                                requested_twitch_channel.clone(),
-                                self.twitch_chat_manager_handle.clone(),
-                            );
-                        }
                         "dealnodeal" | "dealornodeal" => {
                             let game_engine = DealNoDealGame::new();
                             actual_game_type_created = game_engine.game_type_id();
@@ -741,12 +715,12 @@ impl LobbyManagerActor {
                         }
                         unknown => {
                             tracing::warn!(
-                                "LobbyManager: Unknown game type '{}'. Defaulting to HelloWorldGame.",
+                                "LobbyManager: Unknown game type '{}'. Defaulting to MedAndraOrd.",
                                 unknown
                             );
-                            let game_engine = HelloWorldGame::new();
+                            let game_engine = MedAndraOrdGameState::new();
                             actual_game_type_created = game_engine.game_type_id();
-                            lobby_actor_handle = LobbyActorHandle::new_spawned::<HelloWorldGame>(
+                            lobby_actor_handle = LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
                                 lobby_id,
                                 32,
                                 manager_handle_clone,
