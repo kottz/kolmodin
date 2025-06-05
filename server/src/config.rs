@@ -11,7 +11,7 @@ pub struct ServerConfig {
     pub admin_api_key: String, // Changed: Now required, not Option<String>
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TwitchConfig {
     pub client_id: String,
     pub client_secret: String,
