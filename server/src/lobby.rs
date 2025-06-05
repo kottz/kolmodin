@@ -91,6 +91,21 @@ impl LobbyManagerActor {
                     requested_twitch_channel
                 );
 
+                // Validate Twitch channel if requested
+                if let Some(ref channel_name) = requested_twitch_channel {
+                    if !self
+                        .word_list_manager
+                        .is_twitch_channel_allowed(channel_name)
+                        .await
+                    {
+                        let _ = respond_to.send(Err(format!(
+                            "Twitch channel '{}' is not in the allowed channels list.",
+                            channel_name
+                        )));
+                        return;
+                    }
+                }
+
                 if let Some(manager_handle_clone) = self.self_handle_prototype.clone() {
                     let lobby_actor_handle: LobbyActorHandle;
                     let actual_game_type_created: String;

@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::error::{Result as WebResult, WebError};
 use crate::lobby::LobbyDetails;
@@ -13,6 +13,11 @@ use crate::state::AppState;
 pub struct CreateLobbyRequest {
     pub game_type: Option<String>,
     pub twitch_channel: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct AllowedChannelsResponse {
+    pub channels: Vec<String>,
 }
 
 pub async fn create_lobby_handler(
@@ -81,4 +86,20 @@ pub async fn refresh_words_handler(
         })?;
 
     Ok(StatusCode::OK)
+}
+
+pub async fn get_allowed_channels_handler(
+    State(app_state): State<AppState>,
+) -> WebResult<Json<AllowedChannelsResponse>> {
+    tracing::info!("HTTP: Received get_allowed_channels request");
+
+    let channels = app_state
+        .word_list_manager
+        .get_twitch_whitelist()
+        .await
+        .iter()
+        .cloned()
+        .collect();
+
+    Ok(Json(AllowedChannelsResponse { channels }))
 }

@@ -77,6 +77,10 @@ pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> App
     let app = Router::new()
         .route("/api/create-lobby", post(handlers::create_lobby_handler))
         .route("/api/refresh-words", get(handlers::refresh_words_handler))
+        .route(
+            "/api/allowed-channels",
+            get(handlers::get_allowed_channels_handler),
+        )
         .route("/ws", any(ws::ws_handler))
         .with_state(app_state)
         .layer(TraceLayer::new_for_http())

@@ -42,6 +42,19 @@ pub enum WordListSourceType {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct DataFileConfig {
+    pub file_path: String,
+}
+
+impl Default for DataFileConfig {
+    fn default() -> Self {
+        Self {
+            file_path: "kolmodin_data.txt".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct MedAndraOrdWordsConfig {
     pub source_type: WordListSourceType,
     pub file_path: Option<String>,
@@ -61,6 +74,8 @@ impl Default for MedAndraOrdWordsConfig {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct DatabaseConfig {
     #[serde(default)]
+    pub data_file: DataFileConfig,
+    #[serde(default)]
     pub med_andra_ord_words: MedAndraOrdWordsConfig,
 }
 
@@ -79,6 +94,8 @@ pub fn load_settings() -> AppResult<AppSettings> {
         .map(|game_type| Value::new(None, ValueKind::String(game_type.primary_id().to_string())))
         .collect();
 
+    let default_data_file_path =
+        Value::new(None, ValueKind::String("kolmodin_data.txt".to_string()));
     let default_db_mao_source_type = Value::new(None, ValueKind::String("file".to_string()));
     let default_db_mao_file_path = Value::new(None, ValueKind::String("words.txt".to_string()));
 
@@ -104,6 +121,7 @@ pub fn load_settings() -> AppResult<AppSettings> {
             "games.enabled_types",
             Value::new(None, ValueKind::Array(default_games_enabled_types)),
         )?
+        .set_default("database.data_file.file_path", default_data_file_path)?
         .set_default(
             "database.med_andra_ord_words.source_type",
             default_db_mao_source_type,
