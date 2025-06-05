@@ -11,9 +11,9 @@ export interface AdminCommand {
 // The string values in the union should exactly match the Rust enum variant names.
 export type GamePhaseType =
 	| { type: 'Setup' }
-	| { type: 'PlayerCaseSelection_Voting' }
+	| { type: 'PlayerCaseSelectionVoting' }
 	| {
-			type: 'RoundCaseOpening_Voting';
+			type: 'RoundCaseOpeningVoting';
 			data: {
 				round_number: number; // u8
 				total_to_open_for_round: number; // u8
@@ -27,14 +27,14 @@ export type GamePhaseType =
 			};
 	  }
 	| {
-			type: 'DealOrNoDeal_Voting';
+			type: 'DealOrNoDealVoting';
 			data: {
 				round_number: number; // u8
 				offer: number; // u64
 			};
 	  }
 	| {
-			type: 'SwitchOrKeep_Voting';
+			type: 'SwitchOrKeepVoting';
 			data: {
 				final_case_index: number; // usize
 			};

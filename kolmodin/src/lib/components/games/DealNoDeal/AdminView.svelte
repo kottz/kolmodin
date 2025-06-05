@@ -42,9 +42,9 @@
 				<CardContent class="p-8 text-center">
 					{#if dndState.phase.type === 'Setup'}
 						<h2 class="text-4xl font-bold">Waiting to start the game</h2>
-					{:else if dndState.phase.type === 'PlayerCaseSelection_Voting'}
+					{:else if dndState.phase.type === 'PlayerCaseSelectionVoting'}
 						<h2 class="text-4xl font-bold">Vote for your briefcase</h2>
-					{:else if dndState.phase.type === 'RoundCaseOpening_Voting'}
+					{:else if dndState.phase.type === 'RoundCaseOpeningVoting'}
 						<h2 class="text-3xl font-bold">
 							{dndState.phase.data.opened_so_far_for_round} / {dndState.phase.data
 								.total_to_open_for_round} cases opened this round
@@ -53,7 +53,7 @@
 						<h2 class="text-muted-foreground text-3xl font-bold">
 							Banker is calculating the offer...
 						</h2>
-					{:else if dndState.phase.type === 'DealOrNoDeal_Voting'}
+					{:else if dndState.phase.type === 'DealOrNoDealVoting'}
 						<!-- Visual Deal/No Deal Voting Display -->
 						<div class="grid grid-cols-3 items-start gap-8">
 							<!-- DEAL Column -->
@@ -90,7 +90,7 @@
 								</div>
 							</div>
 						</div>
-					{:else if dndState.phase.type === 'SwitchOrKeep_Voting'}
+					{:else if dndState.phase.type === 'SwitchOrKeepVoting'}
 						<!-- Visual Switch/Keep Voting Display -->
 						<div class="grid grid-cols-3 items-start gap-8">
 							<!-- SWITCH Column -->

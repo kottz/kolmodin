@@ -52,8 +52,8 @@ pub enum GameEvent {
 #[serde(tag = "type", content = "data")]
 pub enum GamePhase {
     Setup,
-    PlayerCaseSelection_Voting,
-    RoundCaseOpening_Voting {
+    PlayerCaseSelectionVoting,
+    RoundCaseOpeningVoting {
         round_number: u8,
         total_to_open_for_round: u8,
         opened_so_far_for_round: u8,
@@ -61,11 +61,11 @@ pub enum GamePhase {
     BankerOfferCalculation {
         round_number: u8,
     },
-    DealOrNoDeal_Voting {
+    DealOrNoDealVoting {
         round_number: u8,
         offer: u64,
     },
-    SwitchOrKeep_Voting {
+    SwitchOrKeepVoting {
         final_case_index: usize,
     },
     GameOver {
@@ -116,10 +116,10 @@ impl DealNoDealGame {
     fn prepare_for_client_view(&mut self) {
         let (round_num, target, opened_segment, tally_opt, offer) = match &self.phase {
             GamePhase::Setup => (0, 0, 0, None, None),
-            GamePhase::PlayerCaseSelection_Voting => {
+            GamePhase::PlayerCaseSelectionVoting => {
                 (0, 0, 0, Some(self.tally_current_votes_internal()), None)
             }
-            GamePhase::RoundCaseOpening_Voting {
+            GamePhase::RoundCaseOpeningVoting {
                 round_number,
                 total_to_open_for_round,
                 opened_so_far_for_round,
@@ -131,7 +131,7 @@ impl DealNoDealGame {
                 None,
             ),
             GamePhase::BankerOfferCalculation { round_number } => (*round_number, 0, 0, None, None),
-            GamePhase::DealOrNoDeal_Voting {
+            GamePhase::DealOrNoDealVoting {
                 round_number,
                 offer: current_offer,
             } => {
@@ -152,7 +152,7 @@ impl DealNoDealGame {
                     Some(*current_offer),
                 )
             }
-            GamePhase::SwitchOrKeep_Voting { .. } => (
+            GamePhase::SwitchOrKeepVoting { .. } => (
                 ROUND_SCHEDULE.len() as u8 + 1,
                 0,
                 0,
@@ -265,9 +265,9 @@ impl DealNoDealGame {
         self.player_chosen_case_index = None;
         self.current_round_schedule_index = 0;
 
-        self.phase = GamePhase::PlayerCaseSelection_Voting;
+        self.phase = GamePhase::PlayerCaseSelectionVoting;
         self.current_votes_by_user.clear();
-        tracing::info!("DND: Game board initialized. Phase: PlayerCaseSelection_Voting.");
+        tracing::info!("DND: Game board initialized. Phase: PlayerCaseSelectionVoting.");
     }
 
     fn open_briefcase(&mut self, case_index: usize) -> Option<u64> {
@@ -398,7 +398,7 @@ impl DealNoDealGame {
         let final_tally = self.tally_current_votes_internal();
 
         match current_phase_cloned {
-            GamePhase::PlayerCaseSelection_Voting => {
+            GamePhase::PlayerCaseSelectionVoting => {
                 if let Some(selected_idx) =
                     self.process_player_case_selection_vote_from_tally(&final_tally)
                 {
@@ -424,13 +424,13 @@ impl DealNoDealGame {
                             offer_amount: offer,
                         })
                         .await;
-                        self.phase = GamePhase::DealOrNoDeal_Voting {
+                        self.phase = GamePhase::DealOrNoDealVoting {
                             round_number: 1,
                             offer,
                         };
                         self.current_votes_by_user.clear();
                     } else {
-                        self.phase = GamePhase::RoundCaseOpening_Voting {
+                        self.phase = GamePhase::RoundCaseOpeningVoting {
                             round_number: 1,
                             total_to_open_for_round: cases_to_open_first_round,
                             opened_so_far_for_round: 0,
@@ -444,7 +444,7 @@ impl DealNoDealGame {
                     );
                 }
             }
-            GamePhase::RoundCaseOpening_Voting {
+            GamePhase::RoundCaseOpeningVoting {
                 round_number,
                 total_to_open_for_round,
                 mut opened_so_far_for_round,
@@ -476,13 +476,13 @@ impl DealNoDealGame {
                         offer_amount: offer,
                     })
                     .await;
-                    self.phase = GamePhase::DealOrNoDeal_Voting {
+                    self.phase = GamePhase::DealOrNoDealVoting {
                         round_number,
                         offer,
                     };
                     self.current_votes_by_user.clear();
                 } else {
-                    self.phase = GamePhase::RoundCaseOpening_Voting {
+                    self.phase = GamePhase::RoundCaseOpeningVoting {
                         round_number,
                         total_to_open_for_round,
                         opened_so_far_for_round,
@@ -496,7 +496,7 @@ impl DealNoDealGame {
                     );
                 }
             }
-            GamePhase::DealOrNoDeal_Voting {
+            GamePhase::DealOrNoDealVoting {
                 round_number,
                 offer,
             } => {
@@ -547,7 +547,7 @@ impl DealNoDealGame {
                     if unopened_not_player.len() == 1 {
                         // Final decision: Switch or Keep
                         let final_case_idx = unopened_not_player[0];
-                        self.phase = GamePhase::SwitchOrKeep_Voting {
+                        self.phase = GamePhase::SwitchOrKeepVoting {
                             final_case_index: final_case_idx,
                         };
                         self.current_votes_by_user.clear();
@@ -566,7 +566,7 @@ impl DealNoDealGame {
                         );
 
                         if actual_open_for_next_round > 0 {
-                            self.phase = GamePhase::RoundCaseOpening_Voting {
+                            self.phase = GamePhase::RoundCaseOpeningVoting {
                                 round_number: next_display_r_num,
                                 total_to_open_for_round: actual_open_for_next_round,
                                 opened_so_far_for_round: 0,
@@ -579,7 +579,7 @@ impl DealNoDealGame {
                     }
                 }
             }
-            GamePhase::SwitchOrKeep_Voting { final_case_index } => {
+            GamePhase::SwitchOrKeepVoting { final_case_index } => {
                 let should_switch = self
                     .process_switch_or_keep_votes_from_tally(&final_tally)
                     .unwrap_or(false);
@@ -709,12 +709,12 @@ impl DealNoDealGame {
         current_game_phase: &GamePhase,
     ) -> (bool, Option<String>) {
         match current_game_phase {
-            GamePhase::PlayerCaseSelection_Voting | GamePhase::RoundCaseOpening_Voting { .. } => {
+            GamePhase::PlayerCaseSelectionVoting | GamePhase::RoundCaseOpeningVoting { .. } => {
                 if let Ok(case_id_1_based) = vote_text.parse::<u8>() {
                     if (1..=TOTAL_CASES).contains(&case_id_1_based) {
                         let case_idx_0_based = (case_id_1_based - 1) as usize;
                         let is_player_sel_phase =
-                            matches!(current_game_phase, GamePhase::PlayerCaseSelection_Voting);
+                            matches!(current_game_phase, GamePhase::PlayerCaseSelectionVoting);
 
                         if case_idx_0_based < self.briefcase_is_opened.len()
                             && !self.briefcase_is_opened[case_idx_0_based]
@@ -728,7 +728,7 @@ impl DealNoDealGame {
                     }
                 }
             }
-            GamePhase::DealOrNoDeal_Voting { .. } => {
+            GamePhase::DealOrNoDealVoting { .. } => {
                 let lower = vote_text.to_lowercase();
                 if ["deal", "yes", "d"].contains(&lower.as_str()) {
                     return (true, Some("DEAL".to_string()));
@@ -737,7 +737,7 @@ impl DealNoDealGame {
                     return (true, Some("NO DEAL".to_string()));
                 }
             }
-            GamePhase::SwitchOrKeep_Voting { .. } => {
+            GamePhase::SwitchOrKeepVoting { .. } => {
                 let lower = vote_text.to_lowercase();
                 if ["switch", "swap", "yes", "s"].contains(&lower.as_str()) {
                     return (true, Some("SWITCH".to_string()));
@@ -817,10 +817,10 @@ impl GameLogic for DealNoDealGame {
         let current_phase_clone = self.phase.clone();
         let is_voting_active_phase = matches!(
             current_phase_clone,
-            GamePhase::PlayerCaseSelection_Voting
-                | GamePhase::RoundCaseOpening_Voting { .. }
-                | GamePhase::DealOrNoDeal_Voting { .. }
-                | GamePhase::SwitchOrKeep_Voting { .. }
+            GamePhase::PlayerCaseSelectionVoting
+                | GamePhase::RoundCaseOpeningVoting { .. }
+                | GamePhase::DealOrNoDealVoting { .. }
+                | GamePhase::SwitchOrKeepVoting { .. }
         );
 
         if !is_voting_active_phase {

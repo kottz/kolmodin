@@ -75,7 +75,7 @@ function createDealNoDealStore() {
 
 		// Get current round info if in round opening phase
 		let currentRoundInfo;
-		if (gameState.phase.type === 'RoundCaseOpening_Voting') {
+		if (gameState.phase.type === 'RoundCaseOpeningVoting') {
 			currentRoundInfo = {
 				roundNumber: gameState.phase.data.round_number,
 				casesToOpen: gameState.phase.data.total_to_open_for_round,
@@ -85,12 +85,12 @@ function createDealNoDealStore() {
 
 		// Get vote counts based on current phase
 		let voteCounts;
-		if (gameState.phase.type === 'DealOrNoDeal_Voting') {
+		if (gameState.phase.type === 'DealOrNoDealVoting') {
 			voteCounts = {
 				DEAL: dealNoDealVotesMap.DEAL.length,
 				'NO DEAL': dealNoDealVotesMap['NO DEAL'].length
 			};
-		} else if (gameState.phase.type === 'SwitchOrKeep_Voting') {
+		} else if (gameState.phase.type === 'SwitchOrKeepVoting') {
 			voteCounts = {
 				SWITCH: switchKeepVotesMap.SWITCH.length,
 				KEEP: switchKeepVotesMap.KEEP.length
@@ -340,19 +340,19 @@ function createDealNoDealStore() {
 				const phaseType = eventPayload.data.phase.type;
 				let phaseMessage = '';
 				switch (phaseType) {
-					case 'PlayerCaseSelection_Voting':
+					case 'PlayerCaseSelectionVoting':
 						phaseMessage = '🎯 Choose your lucky case!';
 						break;
-					case 'RoundCaseOpening_Voting':
+					case 'RoundCaseOpeningVoting':
 						phaseMessage = '📦 Opening cases this round...';
 						break;
 					case 'BankerOfferCalculation':
 						phaseMessage = '🏦 Banker is calculating offer...';
 						break;
-					case 'DealOrNoDeal_Voting':
+					case 'DealOrNoDealVoting':
 						phaseMessage = '🤝 Deal or No Deal decision time!';
 						break;
-					case 'SwitchOrKeep_Voting':
+					case 'SwitchOrKeepVoting':
 						phaseMessage = '🔄 Final decision: Switch or Keep?';
 						break;
 					case 'GameOver':

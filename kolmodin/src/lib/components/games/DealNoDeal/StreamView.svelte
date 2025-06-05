@@ -15,15 +15,15 @@
 		switch (phase) {
 			case 'Setup':
 				return 'Setting Up The Game';
-			case 'PlayerCaseSelection_Voting':
+			case 'PlayerCaseSelectionVoting':
 				return 'Choose Your Case!';
-			case 'RoundCaseOpening_Voting':
+			case 'RoundCaseOpeningVoting':
 				return 'Opening Cases...';
 			case 'BankerOfferCalculation':
 				return 'Banker is Calculating...';
-			case 'DealOrNoDeal_Voting':
+			case 'DealOrNoDealVoting':
 				return 'Deal or No Deal?';
-			case 'SwitchOrKeep_Voting':
+			case 'SwitchOrKeepVoting':
 				return 'Switch or Keep?';
 			case 'GameOver':
 				return 'Final Reveal!';
@@ -36,15 +36,15 @@
 		switch (phase) {
 			case 'Setup':
 				return '⚙️';
-			case 'PlayerCaseSelection_Voting':
+			case 'PlayerCaseSelectionVoting':
 				return '🎯';
-			case 'RoundCaseOpening_Voting':
+			case 'RoundCaseOpeningVoting':
 				return '📦';
 			case 'BankerOfferCalculation':
 				return '🏦';
-			case 'DealOrNoDeal_Voting':
+			case 'DealOrNoDealVoting':
 				return '🤝';
-			case 'SwitchOrKeep_Voting':
+			case 'SwitchOrKeepVoting':
 				return '🔄';
 			case 'GameOver':
 				return '💰';
@@ -80,7 +80,7 @@
 	const isPlaying = $derived(gameState.phase.type !== 'Setup');
 	const hasPlayerCase = $derived(gameState.playerChosenCaseIndex !== null);
 	const bankerOffer = $derived(
-		gameState.phase.type === 'DealOrNoDeal_Voting' ? gameState.phase.data?.offer : null
+		gameState.phase.type === 'DealOrNoDealVoting' ? gameState.phase.data?.offer : null
 	);
 	const isGameOver = $derived(gameState.phase.type === 'GameOver');
 	const totalCases = $derived(gameState.briefcases?.length || 0);
@@ -213,7 +213,7 @@
 							<p>🎯 Will you take the deal or risk it all?</p>
 						</div>
 					</div>
-				{:else if gameState.phase.type === 'PlayerCaseSelection_Voting'}
+				{:else if gameState.phase.type === 'PlayerCaseSelectionVoting'}
 					<!-- Case Selection Phase -->
 					<div class="space-y-6 text-center">
 						<div class="animate-pulse text-7xl">🎯</div>
@@ -233,7 +233,7 @@
 							</div>
 						{/if}
 					</div>
-				{:else if gameState.phase.type === 'RoundCaseOpening_Voting'}
+				{:else if gameState.phase.type === 'RoundCaseOpeningVoting'}
 					<!-- Case Opening Phase -->
 					<div class="space-y-6 text-center">
 						<div class="animate-bounce text-7xl">📦</div>
@@ -270,7 +270,7 @@
 							</div>
 						</div>
 					</div>
-				{:else if gameState.phase.type === 'DealOrNoDeal_Voting'}
+				{:else if gameState.phase.type === 'DealOrNoDealVoting'}
 					<!-- Deal or No Deal Decision -->
 					<div class="space-y-6 text-center">
 						<div class="animate-pulse text-7xl">🤝</div>
@@ -305,7 +305,7 @@
 							</div>
 						{/if}
 					</div>
-				{:else if gameState.phase.type === 'SwitchOrKeep_Voting'}
+				{:else if gameState.phase.type === 'SwitchOrKeepVoting'}
 					<!-- Switch or Keep Decision -->
 					<div class="space-y-6 text-center">
 						<div class="animate-pulse text-7xl">🔄</div>
