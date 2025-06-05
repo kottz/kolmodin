@@ -1,5 +1,3 @@
-// src/db.rs
-
 use crate::config::{DatabaseConfig, MedAndraOrdWordsConfig, WordListSourceType};
 use crate::error::{DbError, Result as AppResult};
 use std::collections::HashMap;
@@ -24,35 +22,27 @@ impl DataFileParser {
         for line in content.lines() {
             let trimmed = line.trim();
 
-            // Skip empty lines
             if trimmed.is_empty() {
                 continue;
             }
 
-            // Check if this is a section header
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                // Save previous section if it exists
                 if let Some(section_name) = current_section.take() {
                     sections.insert(section_name, current_items.clone());
                     current_items.clear();
                 }
 
-                // Start new section
                 let section_name = trimmed[1..trimmed.len() - 1].to_string();
                 current_section = Some(section_name);
             } else if current_section.is_some() {
-                // Add item to current section
                 current_items.push(trimmed.to_string());
             }
-            // Ignore lines that aren't in a section
         }
 
-        // Save the last section
         if let Some(section_name) = current_section {
             sections.insert(section_name, current_items);
         }
 
-        // Extract known sections
         let twitch_whitelist = sections
             .get("twitch_whitelist")
             .cloned()
@@ -81,7 +71,6 @@ impl DataFileParser {
 pub struct WordListManager {
     med_andra_ord_words: RwLock<Arc<Vec<String>>>,
     twitch_whitelist: RwLock<Arc<Vec<String>>>,
-    // Store config for refresh
     config: DatabaseConfig,
 }
 
@@ -102,7 +91,6 @@ impl WordListManager {
     }
 
     async fn fetch_data_from_sources(config: &DatabaseConfig) -> Result<GameDataFile, DbError> {
-        // First try to load from the new multi-section data file
         let data_file_path = &config.data_file.file_path;
         tracing::info!("Attempting to read data from file: {}", data_file_path);
 
@@ -124,7 +112,6 @@ impl WordListManager {
             data_file_path
         );
 
-        // Fallback to legacy MedAndraOrd words source
         let words = Self::fetch_words_from_legacy_source(&config.med_andra_ord_words)
             .await
             .unwrap_or_else(|err| {
@@ -136,7 +123,7 @@ impl WordListManager {
             });
 
         Ok(GameDataFile {
-            twitch_whitelist: Vec::new(), // No whitelist from legacy source
+            twitch_whitelist: Vec::new(),
             medandraord_words: words,
         })
     }
@@ -228,7 +215,6 @@ impl WordListManager {
     }
 
     pub async fn refresh_med_andra_ord_words(&self) -> AppResult<()> {
-        // For backward compatibility, this now refreshes all data
         self.refresh_data().await
     }
 
@@ -242,8 +228,6 @@ impl WordListManager {
 
     pub async fn is_twitch_channel_allowed(&self, channel_name: &str) -> bool {
         let whitelist = self.twitch_whitelist.read().await;
-
-        // If whitelist is empty, allow all channels (backward compatibility)
         if whitelist.is_empty() {
             return true;
         }

@@ -1,6 +1,6 @@
 use crate::error::{ConfigError, Result as AppResult};
 use crate::game_logic::GameType;
-use config::{Config, Environment, Value, ValueKind}; // ValueKind is used
+use config::{Config, Environment, Value, ValueKind};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 pub struct ServerConfig {
     pub port: u16,
     pub cors_origins: Vec<String>,
-    pub admin_api_key: String, // Changed: Now required, not Option<String>
+    pub admin_api_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -17,7 +17,7 @@ pub struct TwitchConfig {
     pub client_secret: String,
 }
 
-#[derive(Debug, Deserialize, Clone)] // GamesConfig was already Clone
+#[derive(Debug, Deserialize, Clone)]
 pub struct GamesConfig {
     #[serde(deserialize_with = "deserialize_string_or_list_to_set_lowercase")]
     pub enabled_types: HashSet<String>,
@@ -108,13 +108,8 @@ pub fn load_settings() -> AppResult<AppSettings> {
                 .with_list_parse_key("games.enabled_types")
                 .try_parsing(true),
         )
-        // Set defaults for fields that can have them.
-        // `server.admin_api_key` is now required, so no default here.
-        // If not provided via ENV, deserialization will fail.
         .set_default("server.port", 8080)?
         .set_default("server.cors_origins", Vec::<String>::new())?
-        // `twitch.client_id` and `secret` are also effectively required,
-        // as they are checked later.
         .set_default("twitch.client_id", "")?
         .set_default("twitch.client_secret", "")?
         .set_default(
@@ -139,9 +134,7 @@ pub fn load_settings() -> AppResult<AppSettings> {
         .build()
         .map_err(|e| ConfigError::Load(e.to_string()))?;
 
-    // Attempt to deserialize. This will fail if required fields (like admin_api_key) are missing.
     let app_settings: AppSettings = settings.try_deserialize().map_err(|e| {
-        // Provide a more helpful error message if admin_api_key is likely the cause
         if e.to_string().contains("admin_api_key") {
             ConfigError::Missing(
                 "server.admin_api_key (must be set via KOLMODIN_SERVER__ADMIN_API_KEY env var)"
@@ -152,7 +145,6 @@ pub fn load_settings() -> AppResult<AppSettings> {
         }
     })?;
 
-    // --- Post-deserialization validation ---
     if app_settings.server.admin_api_key.is_empty() {
         return Err(ConfigError::InvalidValue(
             "server.admin_api_key must not be empty".to_string(),
@@ -193,7 +185,6 @@ pub fn load_settings() -> AppResult<AppSettings> {
 
     Ok(app_settings)
 }
-// ... (deserialize_string_or_list_to_set_lowercase remains the same)
 
 fn deserialize_string_or_list_to_set_lowercase<'de, D>(
     deserializer: D,

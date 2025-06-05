@@ -1,7 +1,6 @@
-// src/game_logic/messages.rs
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use uuid::Uuid; // Make sure Uuid is imported
+use uuid::Uuid;
 
 /// Generic messages sent from any Game Client (WebSocket) to the Server.
 #[derive(Serialize, Deserialize, Debug, Clone)]
