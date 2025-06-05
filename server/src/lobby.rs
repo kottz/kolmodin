@@ -44,7 +44,7 @@ pub enum LobbyManagerMessage {
 pub struct LobbyManagerActor {
     receiver: mpsc::Receiver<LobbyManagerMessage>,
     lobbies: HashMap<Uuid, LobbyActorHandle>,
-    self_handle_prototype: Option<LobbyManagerHandle>,
+    self_sender: mpsc::Sender<LobbyManagerMessage>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     games_config: GamesConfig,
     word_list_manager: Arc<WordListManager>,
@@ -53,6 +53,7 @@ pub struct LobbyManagerActor {
 impl LobbyManagerActor {
     fn new(
         receiver: mpsc::Receiver<LobbyManagerMessage>,
+        self_sender: mpsc::Sender<LobbyManagerMessage>,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
         word_list_manager: Arc<WordListManager>,
@@ -60,15 +61,11 @@ impl LobbyManagerActor {
         LobbyManagerActor {
             receiver,
             lobbies: HashMap::new(),
-            self_handle_prototype: None,
+            self_sender,
             twitch_chat_manager_handle,
             games_config,
             word_list_manager,
         }
-    }
-
-    fn set_self_handle(&mut self, handle: LobbyManagerHandle) {
-        self.self_handle_prototype = Some(handle);
     }
 
     async fn handle_message(&mut self, msg: LobbyManagerMessage) {
@@ -106,89 +103,81 @@ impl LobbyManagerActor {
                     }
                 }
 
-                if let Some(manager_handle_clone) = self.self_handle_prototype.clone() {
-                    let lobby_actor_handle: LobbyActorHandle;
-                    let actual_game_type_created: String;
+                let manager_handle = LobbyManagerHandle {
+                    sender: self.self_sender.clone(),
+                };
+                let lobby_actor_handle: LobbyActorHandle;
+                let actual_game_type_created: String;
 
-                    // Get current word list for MedAndraOrd
-                    let mao_words = self.word_list_manager.get_med_andra_ord_words().await;
+                // Get current word list for MedAndraOrd
+                let mao_words = self.word_list_manager.get_med_andra_ord_words().await;
 
-                    match game_type_str_req.to_lowercase().as_str() {
-                        "dealnodeal" | "dealornodeal" => {
-                            if !self.games_config.enabled_types.contains("dealnodeal") {
-                                let _ = respond_to.send(Err(
-                                    "Game type 'dealnodeal' is not enabled.".to_string(),
-                                ));
-                                return;
-                            }
-                            let game_engine = DealNoDealGame::new();
-                            actual_game_type_created = game_engine.game_type_id();
-                            lobby_actor_handle = LobbyActorHandle::new_spawned::<DealNoDealGame>(
-                                lobby_id,
-                                32,
-                                manager_handle_clone,
-                                game_engine,
-                                requested_twitch_channel.clone(),
-                                self.twitch_chat_manager_handle.clone(),
-                            );
+                match game_type_str_req.to_lowercase().as_str() {
+                    "dealnodeal" | "dealornodeal" => {
+                        if !self.games_config.enabled_types.contains("dealnodeal") {
+                            let _ = respond_to
+                                .send(Err("Game type 'dealnodeal' is not enabled.".to_string()));
+                            return;
                         }
-                        "medandraord" | "medandra" | "ord" => {
-                            if !self.games_config.enabled_types.contains("medandraord") {
-                                let _ = respond_to.send(Err(
-                                    "Game type 'medandraord' is not enabled.".to_string(),
-                                ));
-                                return;
-                            }
-                            let game_engine = MedAndraOrdGameState::new(mao_words);
-                            actual_game_type_created = game_engine.game_type_id();
-                            lobby_actor_handle =
-                                LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
-                                    lobby_id,
-                                    32,
-                                    manager_handle_clone,
-                                    game_engine,
-                                    requested_twitch_channel.clone(),
-                                    self.twitch_chat_manager_handle.clone(),
-                                );
+                        let game_engine = DealNoDealGame::new();
+                        actual_game_type_created = game_engine.game_type_id();
+                        lobby_actor_handle = LobbyActorHandle::new_spawned::<DealNoDealGame>(
+                            lobby_id,
+                            32,
+                            manager_handle,
+                            game_engine,
+                            requested_twitch_channel.clone(),
+                            self.twitch_chat_manager_handle.clone(),
+                        );
+                    }
+                    "medandraord" | "medandra" | "ord" => {
+                        if !self.games_config.enabled_types.contains("medandraord") {
+                            let _ = respond_to
+                                .send(Err("Game type 'medandraord' is not enabled.".to_string()));
+                            return;
                         }
-                        unknown => {
-                            tracing::warn!(
-                                "LobbyManager: Unknown game type '{}'. Defaulting to MedAndraOrd if enabled.",
-                                unknown
-                            );
-                            if !self.games_config.enabled_types.contains("medandraord") {
-                                let _ = respond_to.send(Err(format!(
-                                    "Default game type 'medandraord' is not enabled for unknown request '{}'.", unknown
-                                )));
-                                return;
-                            }
-                            let game_engine = MedAndraOrdGameState::new(mao_words);
-                            actual_game_type_created = game_engine.game_type_id();
-                            lobby_actor_handle =
-                                LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
-                                    lobby_id,
-                                    32,
-                                    manager_handle_clone,
-                                    game_engine,
-                                    requested_twitch_channel.clone(),
-                                    self.twitch_chat_manager_handle.clone(),
-                                );
+                        let game_engine = MedAndraOrdGameState::new(mao_words);
+                        actual_game_type_created = game_engine.game_type_id();
+                        lobby_actor_handle = LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
+                            lobby_id,
+                            32,
+                            manager_handle.clone(),
+                            game_engine,
+                            requested_twitch_channel.clone(),
+                            self.twitch_chat_manager_handle.clone(),
+                        );
+                    }
+                    unknown => {
+                        tracing::warn!(
+                            "LobbyManager: Unknown game type '{}'. Defaulting to MedAndraOrd if enabled.",
+                            unknown
+                        );
+                        if !self.games_config.enabled_types.contains("medandraord") {
+                            let _ = respond_to.send(Err(format!(
+                                "Default game type 'medandraord' is not enabled for unknown request '{}'.", unknown
+                            )));
+                            return;
                         }
-                    };
+                        let game_engine = MedAndraOrdGameState::new(mao_words);
+                        actual_game_type_created = game_engine.game_type_id();
+                        lobby_actor_handle = LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
+                            lobby_id,
+                            32,
+                            manager_handle.clone(),
+                            game_engine,
+                            requested_twitch_channel.clone(),
+                            self.twitch_chat_manager_handle.clone(),
+                        );
+                    }
+                };
 
-                    self.lobbies.insert(lobby_id, lobby_actor_handle);
-                    let _ = respond_to.send(Ok(LobbyDetails {
-                        lobby_id,
-                        admin_id,
-                        game_type_created: actual_game_type_created,
-                        twitch_channel_subscribed: requested_twitch_channel,
-                    }));
-                } else {
-                    tracing::error!("LobbyManager: Self handle not set for CreateLobby.");
-                    let _ = respond_to.send(Err(
-                        "LobbyManager internal error: self handle not set.".to_string(),
-                    ));
-                }
+                self.lobbies.insert(lobby_id, lobby_actor_handle);
+                let _ = respond_to.send(Ok(LobbyDetails {
+                    lobby_id,
+                    admin_id,
+                    game_type_created: actual_game_type_created,
+                    twitch_channel_subscribed: requested_twitch_channel,
+                }));
             }
             LobbyManagerMessage::GetLobbyHandle {
                 lobby_id,
@@ -232,8 +221,9 @@ impl LobbyManagerHandle {
         word_list_manager: Arc<WordListManager>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
-        let mut actor = LobbyManagerActor::new(
+        let actor = LobbyManagerActor::new(
             receiver,
+            sender.clone(),
             twitch_chat_manager_handle,
             games_config,
             word_list_manager,
@@ -241,7 +231,6 @@ impl LobbyManagerHandle {
         let handle = Self {
             sender: sender.clone(),
         };
-        actor.set_self_handle(handle.clone());
         tokio::spawn(run_lobby_manager_actor(actor));
         handle
     }

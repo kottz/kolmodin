@@ -7,19 +7,10 @@ use std::fs;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GameDataFile {
     pub twitch_whitelist: Vec<String>,
     pub medandraord_words: Vec<String>,
-}
-
-impl Default for GameDataFile {
-    fn default() -> Self {
-        Self {
-            twitch_whitelist: Vec::new(),
-            medandraord_words: Vec::new(),
-        }
-    }
 }
 
 pub struct DataFileParser;
