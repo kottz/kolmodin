@@ -34,7 +34,7 @@ pub enum AppError {
     #[error("Twitch integration error: {0}")]
     Twitch(#[from] crate::twitch::TwitchError),
     #[error("Web server/handler error: {0}")]
-    Web(#[from] crate::web::WebError), // This path should work now due to pub use in crate::web
+    Web(#[from] crate::web::WebError),
     #[error("Lobby system error: {0}")]
     Lobby(String),
     #[error("I/O error: {0}")]

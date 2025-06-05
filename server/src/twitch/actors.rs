@@ -11,7 +11,6 @@ use super::error::{Result as TwitchResult, TwitchError};
 use super::irc_parser::IrcMessage;
 use super::types::{ChannelTerminationInfo, ParsedTwitchMessage, TwitchChannelConnectionStatus};
 
-// --- TwitchChatManagerActor Messages ---
 #[derive(Debug)]
 pub enum TwitchChatManagerMessage {
     SubscribeToChannel {
@@ -32,7 +31,6 @@ pub enum TwitchChatManagerMessage {
     },
 }
 
-// --- TwitchChatManagerActor Handle ---
 #[derive(Clone, Debug)]
 pub struct TwitchChatManagerActorHandle {
     sender: mpsc::Sender<TwitchChatManagerMessage>,
@@ -114,7 +112,6 @@ impl TwitchChatManagerActorHandle {
     }
 }
 
-// --- TwitchChatManagerActor Struct ---
 struct ChannelActorState {
     handle: TwitchChannelActorHandle,
 }
@@ -343,7 +340,6 @@ async fn run_twitch_chat_manager_actor(mut actor: TwitchChatManagerActor) {
     tracing::info!("[TWITCH_MANAGER] Twitch Chat Manager Actor stopped.");
 }
 
-// --- TwitchChannelActor Messages ---
 #[derive(Debug)]
 pub enum TwitchChannelActorMessage {
     AddSubscriber {
@@ -702,9 +698,7 @@ impl TwitchChannelActor {
                         }
                         self.irc_task_shutdown_tx.take();
                     }
-                    _ => {
-                        // Other statuses imply the IRC loop is active or trying
-                    }
+                    _ => {}
                 }
             }
             TwitchChannelActorMessage::Shutdown => {
@@ -994,7 +988,7 @@ async fn run_irc_connection_loop(
                 }).await;
                 return;
             }
-            _ = tokio::time::sleep(reconnect_delay) => { /* Continue to next attempt */ }
+            _ = tokio::time::sleep(reconnect_delay) => {}
         }
     }
 }
@@ -1070,22 +1064,21 @@ async fn connect_and_listen_irc_single_attempt_adapted(
     let mut pending_health_check = false;
     let mut authenticated = false;
 
-    let health_check_interval = Duration::from_secs(60); // Send health PING every 1 minute
-    let health_check_timeout = Duration::from_secs(10); // Expect PONG within 10 seconds  
-    let server_activity_timeout = Duration::from_secs(400); // No server activity for 6.67 minutes = dead
-    let read_timeout = Duration::from_secs(5); // Very short read timeout for responsive health checks
+    let health_check_interval = Duration::from_secs(60);
+    let health_check_timeout = Duration::from_secs(10);
+    let server_activity_timeout = Duration::from_secs(400);
+    let read_timeout = Duration::from_secs(5);
 
     let mut health_check_start_time = tokio::time::Instant::now();
 
-    // Message rate tracking for sophisticated reconnection logic
     let mut message_timestamps: Vec<tokio::time::Instant> = Vec::new();
-    let rate_window = Duration::from_secs(30); // Track messages over 30-second windows
-    let min_messages_for_rate_detection = 10; // Need at least 10 messages to consider "active"
-    let rate_drop_threshold = 0.3; // 70% drop in rate triggers immediate health check
+    let rate_window = Duration::from_secs(30);
+    let min_messages_for_rate_detection = 10;
+    let rate_drop_threshold = 0.3;
     let mut last_rate_check = tokio::time::Instant::now();
-    let rate_check_interval = Duration::from_secs(10); // Check rate every 10 seconds
+    let rate_check_interval = Duration::from_secs(10);
     let mut last_triggered_rate_ping = tokio::time::Instant::now();
-    let min_time_between_rate_pings = Duration::from_secs(15); // Don't spam rate-based pings
+    let min_time_between_rate_pings = Duration::from_secs(15);
 
     loop {
         line_buffer.clear();
@@ -1159,26 +1152,21 @@ async fn connect_and_listen_irc_single_attempt_adapted(
 
             // Message rate-based health check: Detect sudden drops in active chats
             if now.duration_since(last_rate_check) >= rate_check_interval {
-                // Clean old timestamps outside the rate window
                 message_timestamps
                     .retain(|&timestamp| now.duration_since(timestamp) <= rate_window);
 
                 let current_message_count = message_timestamps.len();
 
-                // Only perform rate-based checks if we have enough messages to establish a baseline
                 if current_message_count >= min_messages_for_rate_detection {
-                    // Calculate current rate (messages per second)
                     let current_rate = current_message_count as f64 / rate_window.as_secs_f64();
 
-                    // Check if we've had a significant drop in the last 10 seconds
                     let recent_cutoff = now - Duration::from_secs(10);
                     let recent_messages = message_timestamps
                         .iter()
                         .filter(|&&timestamp| timestamp >= recent_cutoff)
                         .count();
-                    let recent_rate = recent_messages as f64 / 10.0; // messages per second in last 10s
+                    let recent_rate = recent_messages as f64 / 10.0;
 
-                    // If recent rate is significantly lower than overall rate, trigger immediate health check
                     if recent_rate < (current_rate * rate_drop_threshold)
                         && !pending_health_check
                         && now.duration_since(last_triggered_rate_ping)
@@ -1207,7 +1195,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                                 pending_health_check = true;
                                 health_check_start_time = now;
                                 last_triggered_rate_ping = now;
-                                last_health_check = now; // Reset regular health check timer
+                                last_health_check = now;
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -1235,9 +1223,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 );
                 return Ok(());
             }
-            Ok(Ok(_)) => {
-                // Successfully read a line - process it below
-            }
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 tracing::error!(
                     "[TWITCH][IRC_READ][{}][{}] Error reading from chat: {}",
@@ -1247,9 +1233,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 );
                 return Err(TwitchError::Io(e));
             }
-            Err(_) => {
-                continue;
-            }
+            Err(_) => continue,
         }
 
         let message_line_owned = line_buffer.clone();
@@ -1421,16 +1405,14 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 }
             }
             Some("PRIVMSG") => {
-                // Record timestamp for message rate tracking
                 message_timestamps.push(tokio::time::Instant::now());
 
-                // Limit timestamps vector size to prevent memory growth
                 if message_timestamps.len() > 1000 {
-                    let cutoff = tokio::time::Instant::now() - rate_window * 2; // Keep 2x window for safety
+                    let cutoff = tokio::time::Instant::now() - rate_window * 2;
                     message_timestamps.retain(|&timestamp| timestamp >= cutoff);
                 }
             }
-            _ => { /* Other messages are parsed by the actor */ }
+            _ => {}
         }
     }
 }
@@ -1466,7 +1448,6 @@ mod tests {
     use std::time::Duration;
     use tokio::time::Instant;
 
-    /// Test helper to simulate message timestamps over time
     fn create_test_timestamps(base_time: Instant, intervals: &[u64]) -> Vec<Instant> {
         intervals
             .iter()
@@ -1474,7 +1455,6 @@ mod tests {
             .collect()
     }
 
-    /// Test helper to check if rate drop detection logic works correctly
     fn should_trigger_rate_check(
         message_timestamps: &[Instant],
         now: Instant,
@@ -1482,7 +1462,6 @@ mod tests {
         min_messages_for_rate_detection: usize,
         rate_drop_threshold: f64,
     ) -> bool {
-        // Clean old timestamps outside the rate window
         let active_timestamps: Vec<Instant> = message_timestamps
             .iter()
             .filter(|&&timestamp| now.duration_since(timestamp) <= rate_window)
@@ -1491,23 +1470,19 @@ mod tests {
 
         let current_message_count = active_timestamps.len();
 
-        // Only perform rate-based checks if we have enough messages to establish a baseline
         if current_message_count < min_messages_for_rate_detection {
             return false;
         }
 
-        // Calculate current rate (messages per second)
         let current_rate = current_message_count as f64 / rate_window.as_secs_f64();
 
-        // Check if we've had a significant drop in the last 10 seconds
         let recent_cutoff = now - Duration::from_secs(10);
         let recent_messages = active_timestamps
             .iter()
             .filter(|&&timestamp| timestamp >= recent_cutoff)
             .count();
-        let recent_rate = recent_messages as f64 / 10.0; // messages per second in last 10s
+        let recent_rate = recent_messages as f64 / 10.0;
 
-        // If recent rate is significantly lower than overall rate, trigger immediate health check
         recent_rate < (current_rate * rate_drop_threshold)
     }
 
@@ -1519,7 +1494,6 @@ mod tests {
 
         let base_time = Instant::now();
 
-        // Only 5 messages - below threshold
         let timestamps = create_test_timestamps(base_time, &[1, 2, 3, 4, 5]);
         let now = base_time + Duration::from_secs(15);
 
@@ -1545,7 +1519,6 @@ mod tests {
 
         let base_time = Instant::now();
 
-        // 15 messages evenly distributed over 30 seconds (0.5 msg/sec)
         let timestamps = create_test_timestamps(
             base_time,
             &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28],
@@ -1570,12 +1543,10 @@ mod tests {
     async fn test_message_rate_tracking_triggers_on_rate_drop() {
         let rate_window = Duration::from_secs(30);
         let min_messages_for_rate_detection = 10;
-        let rate_drop_threshold = 0.3; // 70% drop triggers
+        let rate_drop_threshold = 0.3;
 
         let base_time = Instant::now();
 
-        // Simulate active chat that suddenly goes quiet:
-        // 20 messages in first 20 seconds (1 msg/sec), then silence for last 10 seconds
         let timestamps = create_test_timestamps(
             base_time,
             &[
@@ -1602,17 +1573,12 @@ mod tests {
     async fn test_message_rate_tracking_no_trigger_on_minor_drop() {
         let rate_window = Duration::from_secs(30);
         let min_messages_for_rate_detection = 10;
-        let rate_drop_threshold = 0.3; // Need 70% drop to trigger
+        let rate_drop_threshold = 0.3;
 
         let base_time = Instant::now();
 
-        // Simulate minor slowdown: 15 messages over 30 seconds, with slight reduction in last 10s
-        // Overall rate: 0.5 msg/sec, recent rate: ~0.3 msg/sec (40% of original = 60% drop)
-        // This is exactly at threshold, should NOT trigger (< not <=)
-        let timestamps = create_test_timestamps(
-            base_time,
-            &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 21, 24, 27], // 3 messages in last 10s
-        );
+        let timestamps =
+            create_test_timestamps(base_time, &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 21, 24, 27]);
         let now = base_time + Duration::from_secs(30);
 
         let should_trigger = should_trigger_rate_check(
@@ -1637,11 +1603,7 @@ mod tests {
 
         let base_time = Instant::now();
 
-        // Messages outside the 30-second window should be ignored
-        let timestamps = create_test_timestamps(
-            base_time,
-            &[0, 1, 2, 3, 4, 5], // These are 35+ seconds old now
-        );
+        let timestamps = create_test_timestamps(base_time, &[0, 1, 2, 3, 4, 5]);
         let now = base_time + Duration::from_secs(35);
 
         let should_trigger = should_trigger_rate_check(
@@ -1666,15 +1628,12 @@ mod tests {
 
         let base_time = Instant::now();
 
-        // Test threshold boundary: 15 messages over 30s = 0.5 msg/sec
-        // Recent 10s should have only 1 message (at 28s) = 0.1 msg/s which is < 0.15 threshold
         let timestamps = create_test_timestamps(
             base_time,
-            &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 19, 19, 19, 19, 28], // 15 messages, only 1 in recent window
+            &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 19, 19, 19, 19, 28],
         );
         let now = base_time + Duration::from_secs(30);
 
-        // Debug calculation
         let current_rate = timestamps.len() as f64 / rate_window.as_secs_f64();
         let recent_cutoff = now - Duration::from_secs(10);
         let recent_messages = timestamps
@@ -1700,8 +1659,6 @@ mod tests {
             rate_drop_threshold,
         );
 
-        // With only 1 message in recent window (from 28s), rate should be 0.1 msg/s
-        // 0.1 < (0.5 * 0.3) = 0.15, so this should trigger
         assert!(
             should_trigger,
             "Should trigger when rate drops below threshold"
@@ -1713,30 +1670,25 @@ mod tests {
         let rate_window = Duration::from_secs(30);
         let max_size = 1000;
 
-        // Create a vector with more than max_size entries
         let mut message_timestamps: Vec<Instant> = Vec::new();
         let base_time = Instant::now();
 
-        // Add 1200 timestamps
         for i in 0..1200 {
             message_timestamps.push(base_time + Duration::from_secs(i));
         }
 
         let now = base_time + Duration::from_secs(1200);
 
-        // Simulate the cleanup logic
         if message_timestamps.len() > max_size {
-            let cutoff = now - rate_window * 2; // Keep 2x window for safety
+            let cutoff = now - rate_window * 2;
             message_timestamps.retain(|&timestamp| timestamp >= cutoff);
         }
 
-        // Should only keep messages from last 60 seconds (2x window)
         assert!(
             message_timestamps.len() <= 60,
             "Should clean up old timestamps"
         );
 
-        // All remaining timestamps should be within the safety window
         for timestamp in &message_timestamps {
             assert!(
                 now.duration_since(*timestamp) <= rate_window * 2,
@@ -1753,18 +1705,14 @@ mod tests {
 
         let base_time = Instant::now();
 
-        // Realistic scenario: Twitch chat with 1 message per second, then network drops
         let mut timestamps = Vec::new();
 
-        // 20 messages in first 20 seconds (active chat)
         for i in 0..20 {
             timestamps.push(base_time + Duration::from_secs(i));
         }
 
-        // Then 10 seconds of silence (simulating network drop)
         let now = base_time + Duration::from_secs(30);
 
-        // Calculate actual rates for debugging
         let current_rate = timestamps.len() as f64 / rate_window.as_secs_f64();
         let recent_cutoff = now - Duration::from_secs(10);
         let recent_messages = timestamps

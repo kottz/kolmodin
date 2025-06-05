@@ -1,4 +1,3 @@
-// src/game_logic/deal_no_deal.rs
 use axum::extract::ws;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -28,7 +27,6 @@ const ROUND_SCHEDULE: [u8; 9] = [6, 5, 4, 3, 2, 1, 1, 1, 1];
 #[serde(tag = "command")]
 pub enum AdminCommand {
     StartGame,
-    // StartVoting, // Removed: Voting starts automatically
     ConcludeVotingAndProcess,
 }
 
@@ -61,7 +59,6 @@ pub enum GamePhase {
         opened_so_far_for_round: u8,
     },
     BankerOfferCalculation {
-        // This is a brief, intermediate phase
         round_number: u8,
     },
     DealOrNoDeal_Voting {
@@ -69,7 +66,6 @@ pub enum GamePhase {
         offer: u64,
     },
     SwitchOrKeep_Voting {
-        // Final phase when only 1 case remains
         final_case_index: usize,
     },
     GameOver {
@@ -88,11 +84,10 @@ pub struct DealNoDealGame {
     pub briefcase_is_opened: Vec<bool>,
     pub player_chosen_case_index: Option<usize>,
     pub remaining_money_values_in_play: Vec<u64>,
-    pub current_round_schedule_index: usize, // 0-based index for ROUND_SCHEDULE
+    pub current_round_schedule_index: usize,
     current_votes_by_user: HashMap<String, String>,
 
-    // Derived fields, populated by prepare_for_client_view
-    pub current_round_display_number: u8, // 1-based for display
+    pub current_round_display_number: u8,
     pub cases_to_open_this_round_target: u8,
     pub cases_opened_in_current_round_segment: u8,
     pub banker_offer: Option<u64>,
@@ -137,28 +132,22 @@ impl DealNoDealGame {
             ),
             GamePhase::BankerOfferCalculation { round_number } => (*round_number, 0, 0, None, None),
             GamePhase::DealOrNoDeal_Voting {
-                round_number, // This is the 1-based display round number for the offer
+                round_number,
                 offer: current_offer,
             } => {
-                // self.current_round_schedule_index refers to the 0-based index of the completed round in ROUND_SCHEDULE
-                // E.g., after first round (index 0 of schedule) completes, current_round_schedule_index is 0.
-                // Offer is for "end of round 1", so round_number (display) is 1.
                 let schedule_idx_of_completed_round = self.current_round_schedule_index;
 
                 let completed_round_target =
                     if schedule_idx_of_completed_round < ROUND_SCHEDULE.len() {
                         ROUND_SCHEDULE[schedule_idx_of_completed_round]
                     } else {
-                        // This case implies an offer after all scheduled rounds, or if ROUND_SCHEDULE is empty.
-                        // For DND, an offer usually follows a round with cases opened.
-                        // If ROUND_SCHEDULE[0] was 0, current_round_schedule_index is 0, ROUND_SCHEDULE[0] is 0.
                         0
                     };
 
                 (
-                    *round_number,          // Display round number of the offer
-                    completed_round_target, // Target for the round that just finished
-                    completed_round_target, // All cases for that round are considered "opened" for this view
+                    *round_number,
+                    completed_round_target,
+                    completed_round_target,
                     Some(self.tally_current_votes_internal()),
                     Some(*current_offer),
                 )
@@ -171,7 +160,7 @@ impl DealNoDealGame {
                 None,
             ),
             GamePhase::GameOver { winnings, .. } => {
-                (ROUND_SCHEDULE.len() as u8 + 1, 0, 0, None, Some(*winnings)) // Display a "final" round number
+                (ROUND_SCHEDULE.len() as u8 + 1, 0, 0, None, Some(*winnings))
             }
         };
         self.current_round_display_number = round_num;
@@ -274,7 +263,7 @@ impl DealNoDealGame {
         self.remaining_money_values_in_play = MONEY_VALUES.to_vec();
         self.remaining_money_values_in_play.sort_unstable();
         self.player_chosen_case_index = None;
-        self.current_round_schedule_index = 0; // Reset round schedule index
+        self.current_round_schedule_index = 0;
 
         self.phase = GamePhase::PlayerCaseSelection_Voting;
         self.current_votes_by_user.clear();
@@ -304,8 +293,6 @@ impl DealNoDealGame {
         let sum_rem: u64 = self.remaining_money_values_in_play.iter().sum();
         let avg_rem = sum_rem as f64 / self.remaining_money_values_in_play.len() as f64;
 
-        // current_round_schedule_index is 0-based for the round just completed or for which offer is being made.
-        // For progression, if index 0 completed, that's 1 round done.
         let rounds_completed_for_progression = self.current_round_schedule_index + 1;
 
         let prog_factor = if ROUND_SCHEDULE.is_empty() {
@@ -381,7 +368,7 @@ impl DealNoDealGame {
         let deal = tally.get("DEAL").cloned().unwrap_or(0);
         let no_deal = tally.get("NO DEAL").cloned().unwrap_or(0);
         if deal == 0 && no_deal == 0 {
-            return Some(false); // Default to NO DEAL if no votes
+            return Some(false);
         }
         Some(deal >= no_deal)
     }
@@ -393,7 +380,7 @@ impl DealNoDealGame {
         let switch_votes = tally.get("SWITCH").cloned().unwrap_or(0);
         let keep_votes = tally.get("KEEP").cloned().unwrap_or(0);
         if switch_votes == 0 && keep_votes == 0 {
-            return Some(false); // Default to KEEP if no votes
+            return Some(false);
         }
         Some(switch_votes > keep_votes)
     }
@@ -416,7 +403,7 @@ impl DealNoDealGame {
                     self.process_player_case_selection_vote_from_tally(&final_tally)
                 {
                     self.player_chosen_case_index = Some(selected_idx);
-                    self.current_round_schedule_index = 0; // current_round_schedule_index is 0-based for ROUND_SCHEDULE
+                    self.current_round_schedule_index = 0;
 
                     if ROUND_SCHEDULE.is_empty() {
                         self.end_game_no_deal_final_case().await;
@@ -428,32 +415,29 @@ impl DealNoDealGame {
                             tracing::error!(
                                 "[GAME][DND] ROUND_SCHEDULE is empty - using default value"
                             );
-                            6 // Default to 6 cases for first round
+                            6
                         });
                     if cases_to_open_first_round == 0 {
-                        // Special case: immediate offer if first round opens 0 cases
-                        self.phase = GamePhase::BankerOfferCalculation { round_number: 1 }; // Display as Round 1 offer
-                        let offer = self.calculate_banker_offer(); // Uses current_round_schedule_index = 0
+                        self.phase = GamePhase::BankerOfferCalculation { round_number: 1 };
+                        let offer = self.calculate_banker_offer();
                         self.broadcast_game_event_to_all_admins(GameEvent::BankerOfferPresented {
                             offer_amount: offer,
                         })
                         .await;
                         self.phase = GamePhase::DealOrNoDeal_Voting {
-                            round_number: 1, // Offer is for "Round 1" (after 0 cases opened)
+                            round_number: 1,
                             offer,
                         };
                         self.current_votes_by_user.clear();
                     } else {
-                        // Normal first round
                         self.phase = GamePhase::RoundCaseOpening_Voting {
-                            round_number: 1, // 1-based display number
+                            round_number: 1,
                             total_to_open_for_round: cases_to_open_first_round,
                             opened_so_far_for_round: 0,
                         };
                         self.current_votes_by_user.clear();
                     }
                 } else {
-                    // No valid case selected, remain in PlayerCaseSelection_Voting. Clear votes for a fresh attempt.
                     self.current_votes_by_user.clear();
                     tracing::warn!(
                         "DND: No valid player case selected. Awaiting more votes or re-concluding."
@@ -461,7 +445,7 @@ impl DealNoDealGame {
                 }
             }
             GamePhase::RoundCaseOpening_Voting {
-                round_number, // This is 1-based display round number
+                round_number,
                 total_to_open_for_round,
                 mut opened_so_far_for_round,
             } => {
@@ -486,7 +470,6 @@ impl DealNoDealGame {
                 }
 
                 if opened_so_far_for_round >= total_to_open_for_round {
-                    // current_round_schedule_index should be correct here, pointing to the round just finished.
                     self.phase = GamePhase::BankerOfferCalculation { round_number };
                     let offer = self.calculate_banker_offer();
                     self.broadcast_game_event_to_all_admins(GameEvent::BankerOfferPresented {
@@ -494,18 +477,17 @@ impl DealNoDealGame {
                     })
                     .await;
                     self.phase = GamePhase::DealOrNoDeal_Voting {
-                        round_number, // Offer is for the round that just finished
+                        round_number,
                         offer,
                     };
                     self.current_votes_by_user.clear();
                 } else {
-                    // Not enough cases opened, stay in voting for this round segment
                     self.phase = GamePhase::RoundCaseOpening_Voting {
                         round_number,
                         total_to_open_for_round,
-                        opened_so_far_for_round, // Use updated local copy
+                        opened_so_far_for_round,
                     };
-                    self.current_votes_by_user.clear(); // Clear votes for fresh voting for remaining cases
+                    self.current_votes_by_user.clear();
                     tracing::warn!(
                         "DND: Not enough cases opened for round {}. Target: {}, Opened: {}. Awaiting more votes.",
                         round_number,
@@ -515,7 +497,7 @@ impl DealNoDealGame {
                 }
             }
             GamePhase::DealOrNoDeal_Voting {
-                round_number, // 1-based display round number of the offer
+                round_number,
                 offer,
             } => {
                 let took_deal = self
@@ -533,7 +515,7 @@ impl DealNoDealGame {
                 };
                 let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
                     tracing::error!("[GAME][DND] Invalid case index {} during DealOrNoDeal - using default value", p_case_idx);
-                    1000000 // Default to max value as fallback
+                    1000000
                 });
 
                 if took_deal {
@@ -570,14 +552,13 @@ impl DealNoDealGame {
                         };
                         self.current_votes_by_user.clear();
                     } else if self.current_round_schedule_index >= ROUND_SCHEDULE.len() {
-                        // This shouldn't happen with the correct schedule, but safety check
                         self.end_game_no_deal_final_case().await;
                         return;
                     } else {
                         let next_display_r_num = round_number + 1;
                         let cases_to_open_next_round = ROUND_SCHEDULE.get(self.current_round_schedule_index).copied().unwrap_or_else(|| {
                             tracing::error!("[GAME][DND] Invalid round schedule index {} - using default value", self.current_round_schedule_index);
-                            1 // Default to 1 case per round
+                            1
                         });
                         let actual_open_for_next_round = std::cmp::min(
                             cases_to_open_next_round,
@@ -614,14 +595,13 @@ impl DealNoDealGame {
                 };
                 let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
                     tracing::error!("[GAME][DND] Invalid case index {} during SwitchOrKeep - using default value", p_case_idx);
-                    1000000 // Default to max value as fallback
+                    1000000
                 });
                 let final_case_val = self.briefcase_values.get(final_case_index).copied().unwrap_or_else(|| {
                     tracing::error!("[GAME][DND] Invalid final case index {} during SwitchOrKeep - using default value", final_case_index);
-                    1000000 // Default to max value as fallback
+                    1000000
                 });
 
-                // Open the final case for dramatic effect
                 if final_case_index < self.briefcase_is_opened.len()
                     && !self.briefcase_is_opened[final_case_index]
                 {
@@ -646,7 +626,6 @@ impl DealNoDealGame {
                         ),
                     )
                 } else {
-                    // Open player's case for reveal
                     if !self.briefcase_is_opened[p_case_idx] {
                         self.open_briefcase(p_case_idx);
                     }
@@ -698,11 +677,11 @@ impl DealNoDealGame {
 
         let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
             tracing::error!("[GAME][DND] Invalid case index {} at end_game_no_deal_final_case - using default value", p_case_idx);
-            1000000 // Default to max value as fallback
+            1000000
         });
 
         if p_case_idx < self.briefcase_is_opened.len() && !self.briefcase_is_opened[p_case_idx] {
-            self.open_briefcase(p_case_idx); // Mark as opened and remove from remaining values
+            self.open_briefcase(p_case_idx);
         }
 
         self.broadcast_game_event_to_all_admins(GameEvent::CaseOpened {
@@ -821,7 +800,7 @@ impl GameLogic for DealNoDealGame {
                     }
                     Err(e) => {
                         tracing::error!("DND: Deserialize AdminCommand err: {}", e);
-                        self.broadcast_full_state_update_internal().await; // Send current state back
+                        self.broadcast_full_state_update_internal().await;
                     }
                 }
             }

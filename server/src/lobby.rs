@@ -1,16 +1,14 @@
-// src/lobby.rs
-
 use axum::extract::ws;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc; // New import
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::config::GamesConfig;
-use crate::db::WordListManager; // New import
+use crate::db::WordListManager;
 use crate::game_logic::{
     DealNoDealGame, GameLogic, MedAndraOrdGameState, ServerToClientMessage,
     messages as game_messages,
@@ -19,11 +17,10 @@ use crate::twitch::{
     ParsedTwitchMessage, TwitchChannelConnectionStatus, TwitchChatManagerActorHandle,
 };
 
-// ... (LobbyDetails, CreateLobbyRequest, LobbyManagerMessage remain the same) ...
 #[derive(Debug, Serialize, Clone)]
 pub struct LobbyDetails {
     pub lobby_id: Uuid,
-    pub admin_id: Uuid, // Note: admin_id is created but not strongly enforced yet.
+    pub admin_id: Uuid,
     pub game_type_created: String,
     pub twitch_channel_subscribed: Option<String>,
 }
@@ -50,7 +47,7 @@ pub struct LobbyManagerActor {
     self_handle_prototype: Option<LobbyManagerHandle>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     games_config: GamesConfig,
-    word_list_manager: Arc<WordListManager>, // New field
+    word_list_manager: Arc<WordListManager>,
 }
 
 impl LobbyManagerActor {
@@ -58,7 +55,7 @@ impl LobbyManagerActor {
         receiver: mpsc::Receiver<LobbyManagerMessage>,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
-        word_list_manager: Arc<WordListManager>, // New parameter
+        word_list_manager: Arc<WordListManager>,
     ) -> Self {
         LobbyManagerActor {
             receiver,
@@ -66,7 +63,7 @@ impl LobbyManagerActor {
             self_handle_prototype: None,
             twitch_chat_manager_handle,
             games_config,
-            word_list_manager, // Store it
+            word_list_manager,
         }
     }
 
@@ -85,7 +82,7 @@ impl LobbyManagerActor {
                 let admin_id = Uuid::new_v4();
                 let game_type_str_req = requested_game_type
                     .clone()
-                    .unwrap_or_else(|| "medandraord".to_string()); // Default to medandraord
+                    .unwrap_or_else(|| "medandraord".to_string());
 
                 tracing::info!(
                     "LobbyManager: Creating lobby {} req_game='{}' req_twitch='{:?}'",
@@ -125,7 +122,7 @@ impl LobbyManagerActor {
                                     .send(Err(format!("Game type 'medandraord' is not enabled.")));
                                 return;
                             }
-                            let game_engine = MedAndraOrdGameState::new(mao_words); // Pass words
+                            let game_engine = MedAndraOrdGameState::new(mao_words);
                             actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle =
                                 LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
@@ -148,7 +145,7 @@ impl LobbyManagerActor {
                                 )));
                                 return;
                             }
-                            let game_engine = MedAndraOrdGameState::new(mao_words); // Pass words
+                            let game_engine = MedAndraOrdGameState::new(mao_words);
                             actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle =
                                 LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
@@ -215,14 +212,14 @@ impl LobbyManagerHandle {
         buffer_size: usize,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
-        word_list_manager: Arc<WordListManager>, // New parameter
+        word_list_manager: Arc<WordListManager>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
         let mut actor = LobbyManagerActor::new(
             receiver,
             twitch_chat_manager_handle,
             games_config,
-            word_list_manager, // Pass it
+            word_list_manager,
         );
         let handle = Self {
             sender: sender.clone(),
@@ -232,7 +229,6 @@ impl LobbyManagerHandle {
         handle
     }
 
-    // ... (create_lobby, get_lobby_handle, notify_lobby_shutdown remain the same) ...
     pub async fn create_lobby(
         &self,
         requested_game_type: Option<String>,

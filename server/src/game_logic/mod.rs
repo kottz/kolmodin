@@ -1,17 +1,13 @@
-// src/game_logic/mod.rs
-
 use axum::extract::ws;
-use std::{fmt::Debug, future::Future, sync::Arc}; // Added Arc
+use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
 use crate::twitch::ParsedTwitchMessage;
 
-// Add the new messages module and re-export its types
 pub mod messages;
-pub use messages::{ClientToServerMessage, ServerToClientMessage}; // These are now generic
+pub use messages::{ClientToServerMessage, ServerToClientMessage};
 
-// Game mode modules
 pub mod deal_no_deal;
 pub mod med_andra_ord;
 
@@ -25,12 +21,10 @@ pub enum GameType {
 }
 
 impl GameType {
-    /// Get all available game types
     pub fn all() -> Vec<Self> {
         vec![GameType::DealNoDeal, GameType::MedAndraOrd]
     }
 
-    /// Get all valid string identifiers for this game type
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
             GameType::DealNoDeal => &["dealnodeal", "dealornodeal"],
@@ -38,7 +32,6 @@ impl GameType {
         }
     }
 
-    /// Get the primary identifier for this game type
     pub fn primary_id(&self) -> &'static str {
         self.aliases()[0]
     }
@@ -58,18 +51,10 @@ impl GameType {
     }
 }
 
-// Factory functions for creating specific game instances
 impl GameType {
     pub fn create_deal_no_deal_game() -> DealNoDealGame {
         DealNoDealGame::new()
     }
-
-    // MedAndraOrdGameState creation is now handled by LobbyManagerActor,
-    // which has access to the WordListManager to provide the necessary Arc<Vec<String>>.
-    // If a generic factory is needed here, it would require a way to access words.
-    // pub fn create_med_andra_ord_game(words: Arc<Vec<String>>) -> MedAndraOrdGameState {
-    //     MedAndraOrdGameState::new(words)
-    // }
 }
 
 pub trait GameLogic: Send + Sync + Debug {
@@ -81,11 +66,10 @@ pub trait GameLogic: Send + Sync + Debug {
 
     fn client_disconnected(&mut self, client_id: Uuid) -> impl Future<Output = ()> + Send;
 
-    // UPDATED: handle_event now takes the generic structured message
     fn handle_event(
         &mut self,
-        client_id: Uuid,                // The ID of the client sending the command
-        message: ClientToServerMessage, // The generic message wrapper
+        client_id: Uuid,
+        message: ClientToServerMessage,
     ) -> impl Future<Output = ()> + Send;
 
     fn handle_twitch_message(
@@ -95,12 +79,9 @@ pub trait GameLogic: Send + Sync + Debug {
 
     fn is_empty(&self) -> bool;
 
-    /// Returns the unique identifier for this game type (e.g., "DealNoDeal").
-    /// This MUST match the `game_type_id` used in messages.
     fn game_type_id(&self) -> String;
 
     fn get_client_tx(&self, client_id: Uuid) -> Option<TokioMpscSender<ws::Message>>;
 
-    /// Get all connected client IDs for broadcasting
     fn get_all_client_ids(&self) -> Vec<Uuid>;
 }
