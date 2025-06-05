@@ -1,3 +1,5 @@
+// src/error.rs
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -8,6 +10,23 @@ pub enum ConfigError {
     InvalidValue(String),
     #[error("Missing required configuration: {0}")]
     Missing(String),
+}
+
+#[derive(Debug, Error)]
+pub enum DbError {
+    #[error("Word source configuration error: {0}")]
+    Config(String),
+    #[error("Failed to read word file '{path}': {source}")]
+    FileRead {
+        path: String,
+        source: std::io::Error,
+    },
+    #[error("Failed to fetch words from URL '{url}': {source}")]
+    HttpFetch { url: String, source: reqwest::Error },
+    #[error("Word data is empty or invalid after fetch")]
+    EmptyOrInvalidData,
+    #[error("Word source type is 'None', no words loaded.")]
+    SourceIsNone,
 }
 
 #[derive(Debug, Error)]
@@ -26,6 +45,8 @@ pub enum AppError {
     Reqwest(#[from] reqwest::Error),
     #[error("Configuration parsing error: {0}")]
     ConfigParsing(#[from] config::ConfigError),
+    #[error("Database error: {0}")]
+    Database(#[from] DbError),
 }
 
 pub type Result<T, E = AppError> = std::result::Result<T, E>;

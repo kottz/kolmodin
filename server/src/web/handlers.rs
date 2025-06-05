@@ -1,4 +1,4 @@
-use axum::{extract::State, response::Json};
+use axum::{extract::State, http::StatusCode, response::Json}; // Added StatusCode
 use serde::Deserialize;
 
 use super::error::{Result as WebResult, WebError};
@@ -27,4 +27,17 @@ pub async fn create_lobby_handler(
         })?;
 
     Ok(Json(details))
+}
+
+pub async fn refresh_words_handler(State(app_state): State<AppState>) -> WebResult<StatusCode> {
+    tracing::info!("HTTP: Received refresh_words request");
+    app_state
+        .word_list_manager
+        .refresh_med_andra_ord_words()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to refresh words: {:?}", e);
+            WebError::InternalServerError(format!("Failed to refresh words: {}", e))
+        })?;
+    Ok(StatusCode::OK)
 }

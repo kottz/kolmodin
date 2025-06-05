@@ -1,12 +1,16 @@
+// src/lobby.rs
+
 use axum::extract::ws;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc; // New import
 use std::time::Duration as StdDuration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::config::GamesConfig;
+use crate::db::WordListManager; // New import
 use crate::game_logic::{
     DealNoDealGame, GameLogic, MedAndraOrdGameState, ServerToClientMessage,
     messages as game_messages,
@@ -15,10 +19,11 @@ use crate::twitch::{
     ParsedTwitchMessage, TwitchChannelConnectionStatus, TwitchChatManagerActorHandle,
 };
 
+// ... (LobbyDetails, CreateLobbyRequest, LobbyManagerMessage remain the same) ...
 #[derive(Debug, Serialize, Clone)]
 pub struct LobbyDetails {
     pub lobby_id: Uuid,
-    pub admin_id: Uuid,
+    pub admin_id: Uuid, // Note: admin_id is created but not strongly enforced yet.
     pub game_type_created: String,
     pub twitch_channel_subscribed: Option<String>,
 }
@@ -51,6 +56,7 @@ pub struct LobbyManagerActor {
     self_handle_prototype: Option<LobbyManagerHandle>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     games_config: GamesConfig,
+    word_list_manager: Arc<WordListManager>, // New field
 }
 
 impl LobbyManagerActor {
@@ -58,6 +64,7 @@ impl LobbyManagerActor {
         receiver: mpsc::Receiver<LobbyManagerMessage>,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
+        word_list_manager: Arc<WordListManager>, // New parameter
     ) -> Self {
         LobbyManagerActor {
             receiver,
@@ -65,6 +72,7 @@ impl LobbyManagerActor {
             self_handle_prototype: None,
             twitch_chat_manager_handle,
             games_config,
+            word_list_manager, // Store it
         }
     }
 
@@ -83,7 +91,7 @@ impl LobbyManagerActor {
                 let admin_id = Uuid::new_v4();
                 let game_type_str_req = requested_game_type
                     .clone()
-                    .unwrap_or_else(|| "default".to_string());
+                    .unwrap_or_else(|| "medandraord".to_string()); // Default to medandraord
 
                 tracing::info!(
                     "LobbyManager: Creating lobby {} req_game='{}' req_twitch='{:?}'",
@@ -96,8 +104,16 @@ impl LobbyManagerActor {
                     let lobby_actor_handle: LobbyActorHandle;
                     let actual_game_type_created: String;
 
+                    // Get current word list for MedAndraOrd
+                    let mao_words = self.word_list_manager.get_med_andra_ord_words().await;
+
                     match game_type_str_req.to_lowercase().as_str() {
                         "dealnodeal" | "dealornodeal" => {
+                            if !self.games_config.enabled_types.contains("dealnodeal") {
+                                let _ = respond_to
+                                    .send(Err(format!("Game type 'dealnodeal' is not enabled.")));
+                                return;
+                            }
                             let game_engine = DealNoDealGame::new();
                             actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle = LobbyActorHandle::new_spawned::<DealNoDealGame>(
@@ -110,7 +126,12 @@ impl LobbyManagerActor {
                             );
                         }
                         "medandraord" | "medandra" | "ord" => {
-                            let game_engine = MedAndraOrdGameState::new();
+                            if !self.games_config.enabled_types.contains("medandraord") {
+                                let _ = respond_to
+                                    .send(Err(format!("Game type 'medandraord' is not enabled.")));
+                                return;
+                            }
+                            let game_engine = MedAndraOrdGameState::new(mao_words); // Pass words
                             actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle =
                                 LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
@@ -124,10 +145,16 @@ impl LobbyManagerActor {
                         }
                         unknown => {
                             tracing::warn!(
-                                "LobbyManager: Unknown game type '{}'. Defaulting to MedAndraOrd.",
+                                "LobbyManager: Unknown game type '{}'. Defaulting to MedAndraOrd if enabled.",
                                 unknown
                             );
-                            let game_engine = MedAndraOrdGameState::new();
+                            if !self.games_config.enabled_types.contains("medandraord") {
+                                let _ = respond_to.send(Err(format!(
+                                    "Default game type 'medandraord' is not enabled for unknown request '{}'.", unknown
+                                )));
+                                return;
+                            }
+                            let game_engine = MedAndraOrdGameState::new(mao_words); // Pass words
                             actual_game_type_created = game_engine.game_type_id();
                             lobby_actor_handle =
                                 LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
@@ -194,9 +221,15 @@ impl LobbyManagerHandle {
         buffer_size: usize,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
+        word_list_manager: Arc<WordListManager>, // New parameter
     ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
-        let mut actor = LobbyManagerActor::new(receiver, twitch_chat_manager_handle, games_config);
+        let mut actor = LobbyManagerActor::new(
+            receiver,
+            twitch_chat_manager_handle,
+            games_config,
+            word_list_manager, // Pass it
+        );
         let handle = Self {
             sender: sender.clone(),
         };
@@ -205,6 +238,7 @@ impl LobbyManagerHandle {
         handle
     }
 
+    // ... (create_lobby, get_lobby_handle, notify_lobby_shutdown remain the same) ...
     pub async fn create_lobby(
         &self,
         requested_game_type: Option<String>,
@@ -337,7 +371,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                         if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
                             let error_response = ServerToClientMessage::SystemError {
                                 message: format!(
-                                    "Invalid message format: {}. Please send JSON like: {{\"command\":\"Echo\",\"payload\":{{\"message\":\"your_text\"}}}}",
+                                    "Invalid message format: {}. Please send JSON like: {{\"messageType\":\"GlobalCommand\",\"payload\":{{\"command_name\":\"Echo\",\"data\":{{\"message\":\"your_text\"}}}}}}",
                                     e
                                 ),
                             };
@@ -477,7 +511,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
     async fn send_current_twitch_status_to_client(&self, client_id: Uuid) {
         let (status_type, details) = if let Some(ref status_rx) = self.twitch_status_receiver {
             let current_status = status_rx.borrow().clone();
-            match &current_status {
+            match current_status {
                 TwitchChannelConnectionStatus::Initializing => (
                     "Initializing".to_string(),
                     Some("Checking connection...".to_string()),
@@ -672,7 +706,7 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                     Some(msg) => {
                         if matches!(msg, LobbyActorMessage::ProcessEvent { .. }) {
                             last_client_ws_activity = Instant::now();
-                            tracing::debug!(
+                            tracing::trace!( // Changed to trace to reduce log spam for this common event
                                 "Lobby {} Actor (Game: {}): Client WS activity detected. Resetting 60-min inactivity timer.",
                                 actor.lobby_id, actor.game_engine.game_type_id()
                             );
@@ -686,7 +720,8 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                     }
                 }
             }
-            _ = tokio::time::sleep_until(last_client_ws_activity + client_ws_inactivity_timeout_duration) => {
+            _ = tokio::time::sleep_until(last_client_ws_activity + client_ws_inactivity_timeout_duration), if !actor.game_engine.is_empty() => {
+                 // Only run inactivity timeout if there are clients.
                 tracing::info!(
                     "Lobby {} Actor (Game: {}): 60-minute inactivity (no client WebSocket messages received). Notifying manager for shutdown.",
                     actor.lobby_id, actor.game_engine.game_type_id()

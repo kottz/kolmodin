@@ -1,7 +1,7 @@
 // src/game_logic/mod.rs
 
 use axum::extract::ws;
-use std::{fmt::Debug, future::Future};
+use std::{fmt::Debug, future::Future, sync::Arc}; // Added Arc
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
@@ -64,9 +64,12 @@ impl GameType {
         DealNoDealGame::new()
     }
 
-    pub fn create_med_andra_ord_game() -> MedAndraOrdGameState {
-        MedAndraOrdGameState::new()
-    }
+    // MedAndraOrdGameState creation is now handled by LobbyManagerActor,
+    // which has access to the WordListManager to provide the necessary Arc<Vec<String>>.
+    // If a generic factory is needed here, it would require a way to access words.
+    // pub fn create_med_andra_ord_game(words: Arc<Vec<String>>) -> MedAndraOrdGameState {
+    //     MedAndraOrdGameState::new(words)
+    // }
 }
 
 pub trait GameLogic: Send + Sync + Debug {

@@ -3,6 +3,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc; // New import
 use std::time::Instant;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
@@ -16,20 +17,6 @@ use crate::twitch::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_MED_ANDRA_ORD: &str = "MedAndraOrd";
 
-// Static list of Swedish words that are fun to describe
-const SWEDISH_WORDS: &[&str] = &[
-    "jordgubbe",      // strawberry
-    "paraply",        // umbrella
-    "kylskåp",        // refrigerator
-    "tandborste",     // toothbrush
-    "regnbåge",       // rainbow
-    "eldgaffel",      // fork
-    "telefon",        // telephone
-    "cykel",          // bicycle
-    "sommarsemester", // summer vacation
-    "chokladkaka",    // chocolate bar
-];
-
 // Admin Commands (Client -> Server)
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "command")]
@@ -38,7 +25,7 @@ pub enum AdminCommand {
     PassWord,
     ResetGame,
     SetTargetPoints { points: u32 },
-    SetGameDuration { seconds: u32 }, // Changed from SetRoundDuration
+    SetGameDuration { seconds: u32 },
     SetPointLimitEnabled { enabled: bool },
     SetTimeLimitEnabled { enabled: bool },
 }
@@ -48,10 +35,10 @@ pub enum AdminCommand {
 #[serde(tag = "event_type", content = "data")]
 pub enum GameEvent {
     FullStateUpdate(MedAndraOrdGameState),
-    WordChanged { word: String },
+    WordChanged { word: String, is_placeholder: bool }, // Added is_placeholder
     PlayerScored { player: String, points: u32 },
     GamePhaseChanged { new_phase: GamePhase },
-    GameTimeUpdate { remaining_seconds: u64 }, // Optional: for time sync
+    GameTimeUpdate { remaining_seconds: u64 },
 }
 
 // Game Phases
@@ -71,50 +58,49 @@ pub struct MedAndraOrdGameState {
 
     pub phase: GamePhase,
     pub target_points: u32,
-    pub game_duration_seconds: u64, // Changed from round_duration_seconds - total game duration
+    pub game_duration_seconds: u64,
     pub point_limit_enabled: bool,
     pub time_limit_enabled: bool,
     pub player_scores: HashMap<String, u32>,
 
     #[serde(skip)]
-    words: Vec<String>,
+    current_word_list: Arc<Vec<String>>, // Changed from words
     #[serde(skip)]
-    used_words: HashSet<String>,
+    local_used_words: HashSet<String>, // Changed from used_words
     #[serde(skip)]
-    game_start_time: Option<Instant>, // Changed from round_start_time
+    game_start_time: Option<Instant>,
 }
 
 impl Clone for MedAndraOrdGameState {
     fn clone(&self) -> Self {
         Self {
-            clients: HashMap::new(), // Don't clone clients
+            clients: HashMap::new(),
             phase: self.phase.clone(),
             target_points: self.target_points,
             game_duration_seconds: self.game_duration_seconds,
             point_limit_enabled: self.point_limit_enabled,
             time_limit_enabled: self.time_limit_enabled,
             player_scores: self.player_scores.clone(),
-            words: self.words.clone(),
-            used_words: self.used_words.clone(),
+            current_word_list: Arc::clone(&self.current_word_list), // Clone the Arc
+            local_used_words: self.local_used_words.clone(),
             game_start_time: self.game_start_time,
         }
     }
 }
 
 impl MedAndraOrdGameState {
-    pub fn new() -> Self {
-        let words: Vec<String> = SWEDISH_WORDS.iter().map(|&s| s.to_string()).collect();
-
+    pub fn new(word_list_snapshot: Arc<Vec<String>>) -> Self {
+        // Accept word list
         Self {
             clients: HashMap::new(),
             phase: GamePhase::Setup,
             target_points: 10,
-            game_duration_seconds: 300, // 5 minutes default
+            game_duration_seconds: 300,
             point_limit_enabled: true,
             time_limit_enabled: false,
             player_scores: HashMap::new(),
-            words,
-            used_words: HashSet::new(),
+            current_word_list: word_list_snapshot, // Store it
+            local_used_words: HashSet::new(),
             game_start_time: None,
         }
     }
@@ -226,7 +212,6 @@ impl MedAndraOrdGameState {
 
     // End game due to time expiration
     async fn end_game_time_expired(&mut self) {
-        // Find player with most points
         let winner = self
             .player_scores
             .iter()
@@ -251,28 +236,43 @@ impl MedAndraOrdGameState {
             return;
         }
 
-        self.used_words.clear();
+        self.local_used_words.clear(); // Use local_used_words
         self.player_scores.clear();
-
-        // Start game timer
         self.game_start_time = Some(Instant::now());
 
         if let Some(word) = self.get_next_word() {
             self.phase = GamePhase::Playing {
                 current_word: word.clone(),
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
-                .await;
+            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                word,
+                is_placeholder: false,
+            })
+            .await;
             self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
+        } else {
+            // No words available
+            self.phase = GamePhase::Playing {
+                current_word: "Inga ord!".to_string(),
+            };
+            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                word: "Inga ord!".to_string(),
+                is_placeholder: true,
+            })
+            .await;
+            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+                new_phase: self.phase.clone(),
+            })
+            .await;
+            tracing::warn!("MedAndraOrd: No words available to start game.");
         }
     }
 
     async fn handle_pass_word(&mut self) {
         if let GamePhase::Playing { .. } = &self.phase {
-            // Check if game time expired before passing word
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 return;
@@ -282,10 +282,22 @@ impl MedAndraOrdGameState {
                 self.phase = GamePhase::Playing {
                     current_word: word.clone(),
                 };
-
-                // Only send WordChanged event - phase type hasn't changed
-                self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
-                    .await;
+                self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                    word,
+                    is_placeholder: false,
+                })
+                .await;
+            } else {
+                // No more words, perhaps keep current or end round? For now, send placeholder.
+                self.phase = GamePhase::Playing {
+                    current_word: "Slut på ord!".to_string(),
+                };
+                self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                    word: "Slut på ord!".to_string(),
+                    is_placeholder: true,
+                })
+                .await;
+                tracing::warn!("MedAndraOrd: Ran out of words during PassWord.");
             }
         }
     }
@@ -293,7 +305,7 @@ impl MedAndraOrdGameState {
     async fn handle_reset_game(&mut self) {
         self.phase = GamePhase::Setup;
         self.player_scores.clear();
-        self.used_words.clear();
+        self.local_used_words.clear(); // Use local_used_words
         self.game_start_time = None;
 
         self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
@@ -327,40 +339,45 @@ impl MedAndraOrdGameState {
     }
 
     fn get_next_word(&mut self) -> Option<String> {
+        if self.current_word_list.is_empty() {
+            tracing::warn!("MedAndraOrd: Word list is empty, cannot get next word.");
+            return None;
+        }
+
         let available_words: Vec<String> = self
-            .words
+            .current_word_list // Use current_word_list
             .iter()
-            .filter(|word| !self.used_words.contains(*word))
+            .filter(|word| !self.local_used_words.contains(*word)) // Use local_used_words
             .cloned()
             .collect();
 
         if available_words.is_empty() {
-            // Reset used words if all have been used
-            self.used_words.clear();
-            self.words.choose(&mut thread_rng()).cloned()
+            tracing::info!("MedAndraOrd: All words used, resetting used words list for this game.");
+            self.local_used_words.clear(); // Use local_used_words
+            // Try again with reset list
+            self.current_word_list.choose(&mut thread_rng()).cloned()
         } else {
             available_words.choose(&mut thread_rng()).cloned()
         }
     }
 
     async fn process_correct_guess(&mut self, player: &str) {
-        // Check if game time expired before processing guess
         if self.check_game_time_expired() {
             self.end_game_time_expired().await;
             return;
         }
 
-        let current_score = self.player_scores.get(player).unwrap_or(&0) + 1;
-        self.player_scores.insert(player.to_string(), current_score);
+        let current_score = self.player_scores.entry(player.to_string()).or_insert(0);
+        *current_score += 1;
+        let new_score = *current_score; // Get value after update
 
         self.broadcast_game_event_to_all(GameEvent::PlayerScored {
             player: player.to_string(),
-            points: current_score,
+            points: new_score, // Use the new score
         })
         .await;
 
-        // Check if player won by reaching point target (if enabled)
-        if self.point_limit_enabled && current_score >= self.target_points {
+        if self.point_limit_enabled && new_score >= self.target_points {
             self.game_start_time = None;
             self.phase = GamePhase::GameOver {
                 winner: player.to_string(),
@@ -372,19 +389,28 @@ impl MedAndraOrdGameState {
             return;
         }
 
-        // Get next word (no timer reset, no phase change)
         if let Some(word) = self.get_next_word() {
             self.phase = GamePhase::Playing {
                 current_word: word.clone(),
             };
-
-            // Only send WordChanged event - phase type hasn't changed
-            self.broadcast_game_event_to_all(GameEvent::WordChanged { word })
-                .await;
+            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                word,
+                is_placeholder: false,
+            })
+            .await;
+        } else {
+            self.phase = GamePhase::Playing {
+                current_word: "Slut på ord!".to_string(),
+            };
+            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                word: "Slut på ord!".to_string(),
+                is_placeholder: true,
+            })
+            .await;
+            tracing::warn!("MedAndraOrd: Ran out of words after correct guess.");
         }
     }
 
-    // Public method to be called periodically to check game expiration
     pub async fn check_and_handle_game_expiration(&mut self) {
         if matches!(self.phase, GamePhase::Playing { .. }) && self.check_game_time_expired() {
             self.end_game_time_expired().await;
@@ -397,8 +423,6 @@ impl GameLogic for MedAndraOrdGameState {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         tracing::info!("MedAndraOrd: Client {} connected.", client_id);
         self.clients.insert(client_id.clone(), client_tx);
-
-        // Send initial state to new client
         let state_clone = self.clone();
         self.send_game_event_to_client(&client_id, GameEvent::FullStateUpdate(state_clone))
             .await;
@@ -446,11 +470,8 @@ impl GameLogic for MedAndraOrdGameState {
                     }
                 }
             }
-            GenericClientToServerMessage::GlobalCommand {
-                command_name,
-                data: _,
-            } => {
-                tracing::trace!("MedAndraOrd: Received GlobalCommand: {}", command_name);
+            GenericClientToServerMessage::GlobalCommand { .. } => {
+                tracing::trace!("MedAndraOrd: Received GlobalCommand (unhandled)");
             }
             _ => {
                 tracing::warn!("MedAndraOrd: Unrecognized message type");
@@ -459,18 +480,18 @@ impl GameLogic for MedAndraOrdGameState {
     }
 
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {
-        tracing::info!(
-            "MedAndraOrd: Twitch message from {}: {}",
-            message.sender_username,
-            message.text
-        );
-
-        // Process Twitch chat messages based on game phase
         if let GamePhase::Playing { current_word } = &self.phase {
-            // Check if game time expired before processing guess
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 self.broadcast_full_state_update().await;
+                return;
+            }
+
+            // Prevent processing if current word is a placeholder
+            if self.current_word_list.is_empty()
+                || current_word == "Inga ord!"
+                || current_word == "Slut på ord!"
+            {
                 return;
             }
 
@@ -483,7 +504,7 @@ impl GameLogic for MedAndraOrdGameState {
                     guess,
                     message.sender_username
                 );
-                self.used_words.insert(current_word.clone());
+                self.local_used_words.insert(current_word.clone()); // Use local_used_words
                 self.process_correct_guess(&message.sender_username).await;
                 self.broadcast_full_state_update().await;
             }
