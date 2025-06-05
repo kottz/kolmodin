@@ -295,11 +295,7 @@ impl DealNoDealGame {
 
         let rounds_completed_for_progression = self.current_round_schedule_index + 1;
 
-        let prog_factor = if ROUND_SCHEDULE.is_empty() {
-            0.5
-        } else {
-            rounds_completed_for_progression as f64 / ROUND_SCHEDULE.len() as f64
-        };
+        let prog_factor = rounds_completed_for_progression as f64 / ROUND_SCHEDULE.len() as f64;
 
         let offer_perc = 0.10 + (prog_factor * 0.75);
         (avg_rem * offer_perc.min(0.85)).round().max(1.0) as u64
@@ -405,18 +401,7 @@ impl DealNoDealGame {
                     self.player_chosen_case_index = Some(selected_idx);
                     self.current_round_schedule_index = 0;
 
-                    if ROUND_SCHEDULE.is_empty() {
-                        self.end_game_no_deal_final_case().await;
-                        return;
-                    }
-
-                    let cases_to_open_first_round =
-                        ROUND_SCHEDULE.get(0).copied().unwrap_or_else(|| {
-                            tracing::error!(
-                                "[GAME][DND] ROUND_SCHEDULE is empty - using default value"
-                            );
-                            6
-                        });
+                    let cases_to_open_first_round = ROUND_SCHEDULE[0];
                     if cases_to_open_first_round == 0 {
                         self.phase = GamePhase::BankerOfferCalculation { round_number: 1 };
                         let offer = self.calculate_banker_offer();
@@ -659,7 +644,6 @@ impl DealNoDealGame {
                     "DND: ConcludeVotingAndProcess called in invalid phase: {:?}",
                     self.phase
                 );
-                return;
             }
         }
     }
@@ -718,12 +702,10 @@ impl DealNoDealGame {
 
                         if case_idx_0_based < self.briefcase_is_opened.len()
                             && !self.briefcase_is_opened[case_idx_0_based]
+                            && (is_player_sel_phase
+                                || Some(case_idx_0_based) != self.player_chosen_case_index)
                         {
-                            if is_player_sel_phase
-                                || Some(case_idx_0_based) != self.player_chosen_case_index
-                            {
-                                return (true, Some(case_id_1_based.to_string()));
-                            }
+                            return (true, Some(case_id_1_based.to_string()));
                         }
                     }
                 }
@@ -754,7 +736,7 @@ impl DealNoDealGame {
 
 impl GameLogic for DealNoDealGame {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
-        self.clients.insert(client_id.clone(), client_tx);
+        self.clients.insert(client_id, client_tx);
         self.prepare_for_client_view();
         let state_clone = self.clone();
         if let Ok(wrapped_message) = GenericServerToClientMessage::new_game_specific_event(

@@ -18,7 +18,7 @@ pub mod error;
 pub mod handlers;
 pub mod ws;
 
-pub use self::error::{Result as WebResult, WebError};
+pub use self::error::WebError;
 
 pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> AppResult<()> {
     let cors_origins_result: Result<Vec<HeaderValue>, _> = server_config

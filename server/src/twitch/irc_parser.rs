@@ -106,7 +106,7 @@ impl<'a> IrcMessage<'a> {
         if self.command != Some("PRIVMSG") {
             return None;
         }
-        let target_channel_in_msg = self.params.get(0)?.trim_start_matches('#');
+        let target_channel_in_msg = self.params.first()?.trim_start_matches('#');
         if !target_channel_in_msg.eq_ignore_ascii_case(channel_name_str) {
             return None;
         }
@@ -121,7 +121,7 @@ impl<'a> IrcMessage<'a> {
             // Check for various categories of non-content characters
             if last_char.is_control() // Catches Unicode control characters (Cc, Cf categories)
                 || last_char.is_whitespace() // Catches broader Unicode whitespace (Zs, Zl, Zp categories)
-                || (char_unicode_val >= 0xE0000 && char_unicode_val <= 0xE007F) // Unicode Tag characters (often used as invisible markers)
+                || (0xE0000..=0xE007F).contains(&char_unicode_val) // Unicode Tag characters (often used as invisible markers)
                 || char_unicode_val == 0x200B // Zero Width Space
                 || char_unicode_val == 0xFE0F // Variation Selector 16 (used with emojis, can be appended)
                 || char_unicode_val == 0x200C // Zero Width Non-Joiner
@@ -146,13 +146,11 @@ impl<'a> IrcMessage<'a> {
         let message_id = self.get_tag_value("id").map(str::to_string);
 
         let is_moderator = self.get_tag_value("mod") == Some("1")
-            || badges_str
-                .as_ref()
-                .map_or(false, |b| b.contains("moderator"));
+            || badges_str.as_ref().is_some_and(|b| b.contains("moderator"));
         let is_subscriber = self.get_tag_value("subscriber") == Some("1")
             || self
                 .get_tag_value("badges")
-                .map_or(false, |b| b.contains("subscriber/"));
+                .is_some_and(|b| b.contains("subscriber/"));
 
         let mut raw_tags_map = HashMap::new();
         if let Some(tags_str) = self.tags {

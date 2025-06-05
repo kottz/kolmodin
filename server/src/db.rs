@@ -1,7 +1,7 @@
 // src/db.rs
 
 use crate::config::{DatabaseConfig, MedAndraOrdWordsConfig, WordListSourceType};
-use crate::error::{AppError, DbError, Result as AppResult};
+use crate::error::{DbError, Result as AppResult};
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::RwLock; // Use tokio's RwLock for async contexts if methods become async

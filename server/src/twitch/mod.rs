@@ -4,7 +4,7 @@ pub mod error;
 pub mod irc_parser;
 pub mod types;
 
-pub use actors::{TwitchChannelActorHandle, TwitchChatManagerActorHandle};
+pub use actors::TwitchChatManagerActorHandle;
 pub use auth::fetch_twitch_app_access_token;
-pub use error::{Result as TwitchResult, TwitchError};
-pub use types::{ChannelTerminationInfo, ParsedTwitchMessage, TwitchChannelConnectionStatus};
+pub use error::TwitchError;
+pub use types::{ParsedTwitchMessage, TwitchChannelConnectionStatus};

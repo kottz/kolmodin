@@ -58,18 +58,10 @@ impl Default for MedAndraOrdWordsConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct DatabaseConfig {
     #[serde(default)]
     pub med_andra_ord_words: MedAndraOrdWordsConfig,
-}
-
-impl Default for DatabaseConfig {
-    fn default() -> Self {
-        Self {
-            med_andra_ord_words: MedAndraOrdWordsConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]

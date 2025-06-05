@@ -407,7 +407,7 @@ impl MedAndraOrdGameState {
 impl GameLogic for MedAndraOrdGameState {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         tracing::info!("MedAndraOrd: Client {} connected.", client_id);
-        self.clients.insert(client_id.clone(), client_tx);
+        self.clients.insert(client_id, client_tx);
         let state_clone = self.clone();
         self.send_game_event_to_client(&client_id, GameEvent::FullStateUpdate(state_clone))
             .await;

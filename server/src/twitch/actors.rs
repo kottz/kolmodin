@@ -503,7 +503,7 @@ impl TwitchChannelActor {
                 let task_is_truly_stopped_or_never_started = self
                     .irc_connection_task_handle
                     .as_ref()
-                    .map_or(true, |h| h.is_finished());
+                    .is_none_or(|h| h.is_finished());
 
                 let current_actor_status = self.status_tx.borrow().clone();
 
@@ -586,41 +586,39 @@ impl TwitchChannelActor {
                         );
                         self.signal_irc_task_shutdown();
                     }
-                } else {
-                    if !line.trim().is_empty()
-                        && (irc_msg.command().is_some() || irc_msg.prefix().is_some())
-                        && !matches!(
-                            irc_msg.command(),
-                            Some("PING")
-                                | Some("PONG")
-                                | Some("CAP")
-                                | Some("001")
-                                | Some("002")
-                                | Some("003")
-                                | Some("004")
-                                | Some("372")
-                                | Some("375")
-                                | Some("376")
-                                | Some("JOIN")
-                                | Some("PART")
-                                | Some("NOTICE")
-                                | Some("GLOBALUSERSTATE")
-                                | Some("ROOMSTATE")
-                                | Some("USERSTATE")
-                                | Some("CLEARCHAT")
-                                | Some("CLEARMSG")
-                                | Some("USERNOTICE")
-                                | Some("RECONNECT")
-                                | None
-                        )
-                    {
-                        tracing::trace!(
-                            "[TWITCH][ACTOR][{}][{}] Received unhandled/non-chat IRC line: {}",
-                            self.channel_name,
-                            self.actor_id,
-                            line.trim()
-                        );
-                    }
+                } else if !line.trim().is_empty()
+                    && (irc_msg.command().is_some() || irc_msg.prefix().is_some())
+                    && !matches!(
+                        irc_msg.command(),
+                        Some("PING")
+                            | Some("PONG")
+                            | Some("CAP")
+                            | Some("001")
+                            | Some("002")
+                            | Some("003")
+                            | Some("004")
+                            | Some("372")
+                            | Some("375")
+                            | Some("376")
+                            | Some("JOIN")
+                            | Some("PART")
+                            | Some("NOTICE")
+                            | Some("GLOBALUSERSTATE")
+                            | Some("ROOMSTATE")
+                            | Some("USERSTATE")
+                            | Some("CLEARCHAT")
+                            | Some("CLEARMSG")
+                            | Some("USERNOTICE")
+                            | Some("RECONNECT")
+                            | None
+                    )
+                {
+                    tracing::trace!(
+                        "[TWITCH][ACTOR][{}][{}] Received unhandled/non-chat IRC line: {}",
+                        self.channel_name,
+                        self.actor_id,
+                        line.trim()
+                    );
                 }
             }
             TwitchChannelActorMessage::InternalConnectionStatusChanged { new_status } => {
@@ -643,7 +641,7 @@ impl TwitchChannelActor {
                         let irc_loop_task_has_exited = self
                             .irc_connection_task_handle
                             .as_ref()
-                            .map_or(true, |h| h.is_finished());
+                            .is_none_or(|h| h.is_finished());
 
                         if irc_loop_task_has_exited {
                             tracing::info!(
@@ -1260,7 +1258,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
             Some("PING") => {
                 let pong_target = parsed_for_task_logic
                     .params()
-                    .get(0)
+                    .first()
                     .unwrap_or(&":tmi.twitch.tv");
 
                 tracing::debug!(
@@ -1333,7 +1331,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                     .unwrap_or_default();
                 let joined_chan = parsed_for_task_logic
                     .params()
-                    .get(0)
+                    .first()
                     .map(|s| s.trim_start_matches('#'))
                     .unwrap_or_default();
                 if joined_chan.eq_ignore_ascii_case(&channel_name)

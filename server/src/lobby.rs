@@ -1,5 +1,5 @@
 use axum::extract::ws;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -101,8 +101,9 @@ impl LobbyManagerActor {
                     match game_type_str_req.to_lowercase().as_str() {
                         "dealnodeal" | "dealornodeal" => {
                             if !self.games_config.enabled_types.contains("dealnodeal") {
-                                let _ = respond_to
-                                    .send(Err(format!("Game type 'dealnodeal' is not enabled.")));
+                                let _ = respond_to.send(Err(
+                                    "Game type 'dealnodeal' is not enabled.".to_string(),
+                                ));
                                 return;
                             }
                             let game_engine = DealNoDealGame::new();
@@ -118,8 +119,9 @@ impl LobbyManagerActor {
                         }
                         "medandraord" | "medandra" | "ord" => {
                             if !self.games_config.enabled_types.contains("medandraord") {
-                                let _ = respond_to
-                                    .send(Err(format!("Game type 'medandraord' is not enabled.")));
+                                let _ = respond_to.send(Err(
+                                    "Game type 'medandraord' is not enabled.".to_string(),
+                                ));
                                 return;
                             }
                             let game_engine = MedAndraOrdGameState::new(mao_words);
