@@ -7,7 +7,6 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::time::Duration as TokioDuration;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::compression::CompressionLevel;
-use tower_http::trace::DefaultMakeSpan;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::warn;
 
@@ -80,10 +79,7 @@ pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> App
         .route("/api/refresh-words", get(handlers::refresh_words_handler))
         .route("/ws", any(ws::ws_handler))
         .with_state(app_state)
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::default().include_headers(true)),
-        )
+        .layer(TraceLayer::new_for_http())
         .layer(
             CompressionLayer::new()
                 .quality(CompressionLevel::Default)
@@ -97,7 +93,10 @@ pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> App
     let addr = SocketAddr::from(([0, 0, 0, 0], server_config.port));
     tracing::info!("Listening on {}", addr);
 
-    axum::serve(tokio::net::TcpListener::bind(addr).await?, app)
-        .await
-        .map_err(Into::into)
+    axum::serve(
+        tokio::net::TcpListener::bind(addr).await?,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(Into::into)
 }
