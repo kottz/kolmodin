@@ -5,7 +5,7 @@ use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
-use crate::twitch_integration::ParsedTwitchMessage;
+use crate::twitch::ParsedTwitchMessage;
 
 // Add the new messages module and re-export its types
 pub mod messages;
@@ -17,6 +17,57 @@ pub mod med_andra_ord;
 
 pub use deal_no_deal::DealNoDealGame;
 pub use med_andra_ord::MedAndraOrdGameState;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GameType {
+    DealNoDeal,
+    MedAndraOrd,
+}
+
+impl GameType {
+    /// Get all available game types
+    pub fn all() -> Vec<Self> {
+        vec![GameType::DealNoDeal, GameType::MedAndraOrd]
+    }
+
+    /// Get all valid string identifiers for this game type
+    pub fn aliases(&self) -> &'static [&'static str] {
+        match self {
+            GameType::DealNoDeal => &["dealnodeal", "dealornodeal"],
+            GameType::MedAndraOrd => &["medandraord", "medandra", "ord"],
+        }
+    }
+
+    /// Get the primary identifier for this game type
+    pub fn primary_id(&self) -> &'static str {
+        self.aliases()[0]
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        let s_lower = s.to_lowercase();
+        Self::all()
+            .into_iter()
+            .find(|game_type| game_type.aliases().iter().any(|alias| *alias == s_lower))
+    }
+
+    pub fn to_game_type_id(&self) -> String {
+        match self {
+            GameType::DealNoDeal => "DealNoDeal".to_string(),
+            GameType::MedAndraOrd => "MedAndraOrd".to_string(),
+        }
+    }
+}
+
+// Factory functions for creating specific game instances
+impl GameType {
+    pub fn create_deal_no_deal_game() -> DealNoDealGame {
+        DealNoDealGame::new()
+    }
+
+    pub fn create_med_andra_ord_game() -> MedAndraOrdGameState {
+        MedAndraOrdGameState::new()
+    }
+}
 
 pub trait GameLogic: Send + Sync + Debug {
     fn client_connected(

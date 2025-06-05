@@ -12,7 +12,7 @@ use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
 };
-use crate::twitch_integration::ParsedTwitchMessage;
+use crate::twitch::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_DND: &str = "DealNoDeal";
 

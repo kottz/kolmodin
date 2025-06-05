@@ -1,285 +1,355 @@
-// src/twitch_integration.rs
-
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-// This now refers to the actual handle defined in the (soon to be created) twitch_chat_manager module.
-// Ensure your project structure has `src/twitch_chat_manager.rs` and it's declared in `lib.rs` or `main.rs` (e.g. `mod twitch_chat_manager;`)
-use crate::twitch_chat_manager::TwitchChatManagerActorHandle;
+use super::error::{Result as TwitchResult, TwitchError};
+use super::irc_parser::IrcMessage;
+use super::types::{ChannelTerminationInfo, ParsedTwitchMessage, TwitchChannelConnectionStatus};
 
-// --- Error Definitions ---
-#[derive(Error, Debug)]
-pub enum TwitchError {
-    #[error("Environment variable not set: {0}")]
-    EnvVarError(String),
-    #[error("HTTP request failed: {0}")]
-    Reqwest(#[from] reqwest::Error),
-    #[error("JSON deserialization failed: {0}")]
-    SerdeJson(#[from] serde_json::Error),
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Twitch IRC authentication/API error: {0}")]
-    TwitchAuth(String),
-    #[error("IRC message parsing error: {0}")]
-    ParseError(String),
-    #[error("Capability negotiation failed: NAK received for {0:?}")]
-    CapabilityNak(Vec<String>),
-    #[error("Missing access token in API response")]
-    MissingToken,
-    #[error("Actor communication error: {0}")]
-    ActorComm(String),
-    #[error("Twitch Channel Actor for {0} shut down or failed to start")]
-    ChannelActorTerminated(String),
-    #[error("Failed to send to subscriber for lobby {0}: {1}")]
-    SubscriberSendError(Uuid, String),
-    #[error("Channel actor internal error: {0}")]
-    InternalActorError(String),
-    #[error("IRC Task failed to send to actor: {0}")]
-    IrcTaskSendError(String),
-}
-pub type Result<T, E = TwitchError> = std::result::Result<T, E>;
-
-// --- Connection Status Enum for a Twitch Channel ---
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub enum TwitchChannelConnectionStatus {
-    Initializing,
-    Connecting {
-        attempt: u32,
+// --- TwitchChatManagerActor Messages ---
+#[derive(Debug)]
+pub enum TwitchChatManagerMessage {
+    SubscribeToChannel {
+        channel_name: String,
+        lobby_id: Uuid,
+        twitch_message_tx_for_lobby: mpsc::Sender<ParsedTwitchMessage>,
+        respond_to:
+            oneshot::Sender<Result<watch::Receiver<TwitchChannelConnectionStatus>, TwitchError>>,
     },
-    Authenticating {
-        attempt: u32,
+    UnsubscribeFromChannel {
+        channel_name: String,
+        lobby_id: Uuid,
+        respond_to: oneshot::Sender<Result<(), TwitchError>>,
     },
-    Connected,
-    Reconnecting {
-        reason: String,
-        failed_attempt: u32,
-        retry_in: Duration,
+    ChannelActorCompleted {
+        channel_name: String,
+        termination_info: ChannelTerminationInfo,
     },
-    Disconnected {
-        reason: String,
-    },
-    Terminated,
 }
 
-#[derive(Debug, Clone)]
-pub struct ChannelTerminationInfo {
-    pub channel_name: String,
-    pub actor_id: Uuid,
-    pub final_status: TwitchChannelConnectionStatus,
+// --- TwitchChatManagerActor Handle ---
+#[derive(Clone, Debug)]
+pub struct TwitchChatManagerActorHandle {
+    sender: mpsc::Sender<TwitchChatManagerMessage>,
 }
 
-// --- Parsed Twitch Message (New Data Structure) ---
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParsedTwitchMessage {
-    pub channel: String,
-    pub sender_username: String,
-    pub sender_user_id: Option<String>,
-    pub text: String,
-    pub badges: Option<String>,
-    pub is_moderator: bool,
-    pub is_subscriber: bool,
-    pub message_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw_irc_tags: Option<HashMap<String, String>>,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
-
-// --- IRC Message Parser ---
-#[derive(Debug, Default)]
-pub struct IrcMessage<'a> {
-    raw: &'a str,
-    tags: Option<&'a str>,
-    prefix: Option<&'a str>,
-    command: Option<&'a str>,
-    params: Vec<&'a str>,
-}
-
-impl<'a> IrcMessage<'a> {
-    pub fn parse(line: &'a str) -> Self {
-        let mut message = IrcMessage {
-            raw: line,
-            ..Default::default()
-        };
-        let mut remainder = line.trim_end_matches(['\r', '\n']);
-
-        if remainder.starts_with('@') {
-            if let Some(space_idx) = remainder.find(' ') {
-                message.tags = Some(&remainder[1..space_idx]);
-                remainder = &remainder[space_idx + 1..];
-            } else {
-                message.tags = Some(&remainder[1..]);
-                return message;
-            }
-        }
-        if remainder.starts_with(':') {
-            if let Some(space_idx) = remainder.find(' ') {
-                message.prefix = Some(&remainder[1..space_idx]);
-                remainder = &remainder[space_idx + 1..];
-            } else {
-                message.prefix = Some(&remainder[1..]);
-                return message;
-            }
-        }
-        if let Some(trail_marker_idx) = remainder.find(" :") {
-            let command_and_middle_params_part = &remainder[..trail_marker_idx];
-            let trailing_param = &remainder[trail_marker_idx + 2..];
-            let mut parts = command_and_middle_params_part.split(' ');
-            message.command = parts.next().filter(|s| !s.is_empty());
-            for p_str in parts {
-                if !p_str.is_empty() {
-                    message.params.push(p_str);
-                }
-            }
-            message.params.push(trailing_param);
-        } else {
-            let mut parts = remainder.split(' ');
-            message.command = parts.next().filter(|s| !s.is_empty());
-            for p_str in parts {
-                if !p_str.is_empty() {
-                    message.params.push(p_str);
-                }
-            }
-        }
-        message
+impl TwitchChatManagerActorHandle {
+    pub fn new(
+        app_oauth_token: Arc<String>,
+        manager_buffer_size: usize,
+        channel_actor_buffer_size: usize,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel(manager_buffer_size);
+        let actor = TwitchChatManagerActor::new(
+            receiver,
+            app_oauth_token,
+            channel_actor_buffer_size,
+            sender.clone(),
+        );
+        tokio::spawn(run_twitch_chat_manager_actor(actor));
+        Self { sender }
     }
 
-    pub fn get_tag_value(&self, key_to_find: &str) -> Option<&'a str> {
-        self.tags.and_then(|tags_str| {
-            tags_str.split(';').find_map(|component| {
-                let mut parts = component.splitn(2, '=');
-                let key = parts.next()?;
-                if key == key_to_find {
-                    parts.next().or(Some(""))
-                } else {
-                    None
-                }
+    pub async fn subscribe_to_channel(
+        &self,
+        channel_name: String,
+        lobby_id: Uuid,
+        twitch_message_tx_for_lobby: mpsc::Sender<ParsedTwitchMessage>,
+    ) -> Result<watch::Receiver<TwitchChannelConnectionStatus>, TwitchError> {
+        let (respond_to_tx, respond_to_rx) = oneshot::channel();
+        self.sender
+            .send(TwitchChatManagerMessage::SubscribeToChannel {
+                channel_name,
+                lobby_id,
+                twitch_message_tx_for_lobby,
+                respond_to: respond_to_tx,
             })
-        })
+            .await
+            .map_err(|e| {
+                TwitchError::ActorComm(format!(
+                    "Failed to send SubscribeToChannel to manager: {}",
+                    e
+                ))
+            })?;
+
+        respond_to_rx.await.map_err(|e| {
+            TwitchError::ActorComm(format!(
+                "Manager failed to respond to SubscribeToChannel: {}",
+                e
+            ))
+        })?
     }
 
-    pub fn get_display_name(&self) -> Option<&'a str> {
-        self.get_tag_value("display-name")
-    }
+    pub async fn unsubscribe_from_channel(
+        &self,
+        channel_name: String,
+        lobby_id: Uuid,
+    ) -> Result<(), TwitchError> {
+        let (respond_to_tx, respond_to_rx) = oneshot::channel();
+        self.sender
+            .send(TwitchChatManagerMessage::UnsubscribeFromChannel {
+                channel_name,
+                lobby_id,
+                respond_to: respond_to_tx,
+            })
+            .await
+            .map_err(|e| {
+                TwitchError::ActorComm(format!(
+                    "Failed to send UnsubscribeFromChannel to manager: {}",
+                    e
+                ))
+            })?;
 
-    pub fn get_prefix_username(&self) -> Option<&'a str> {
-        self.prefix.and_then(|p| p.split('!').next())
-    }
-
-    pub fn get_privmsg_text_content(&self) -> Option<&'a str> {
-        if self.command == Some("PRIVMSG") && self.params.len() > 1 {
-            self.params.last().copied()
-        } else {
-            None
-        }
-    }
-
-    pub fn to_parsed_twitch_message(&self, channel_name_str: &str) -> Option<ParsedTwitchMessage> {
-        if self.command != Some("PRIVMSG") {
-            return None;
-        }
-        let target_channel_in_msg = self.params.get(0)?.trim_start_matches('#');
-        if !target_channel_in_msg.eq_ignore_ascii_case(channel_name_str) {
-            return None;
-        }
-
-        // Original text extraction
-        let initial_text_content = self.get_privmsg_text_content()?.to_string();
-
-        // --- BEGIN TEXT CLEANUP ---
-        // Step 1: Standard trim for leading/trailing common whitespace (ASCII space, tab, newline etc.)
-        let mut cleaned_text_content = initial_text_content.trim().to_string();
-
-        // Step 2: Iteratively remove problematic trailing Unicode characters.
-        // This targets characters like U+200B (Zero Width Space), U+FE0F (Variation Selector),
-        // control characters, format characters, and the specific PUA/Tag range observed (U+E0000-U+E007F).
-        while let Some(last_char) = cleaned_text_content.chars().last() {
-            let char_unicode_val = last_char as u32;
-
-            // Check for various categories of non-content characters
-            if last_char.is_control() ||  // Catches Unicode control characters (Cc, Cf categories)
-               last_char.is_whitespace() || // Catches broader Unicode whitespace (Zs, Zl, Zp categories)
-               (char_unicode_val >= 0xE0000 && char_unicode_val <= 0xE007F) || // Unicode Tag characters (often used as invisible markers)
-               char_unicode_val == 0x200B || // Zero Width Space
-               char_unicode_val == 0xFE0F || // Variation Selector 16 (used with emojis, can be appended)
-               char_unicode_val == 0x200C || // Zero Width Non-Joiner
-               char_unicode_val == 0x200D
-            // Zero Width Joiner
-            // Add other specific Unicode points or small ranges if more are identified
-            {
-                cleaned_text_content.pop(); // Remove the last character
-            } else {
-                // If the last character is not one of the types we want to remove, stop.
-                break;
-            }
-        }
-        // --- END TEXT CLEANUP ---
-
-        // Use the fully cleaned text_content for the ParsedTwitchMessage
-        let text = cleaned_text_content;
-
-        let sender_username = self
-            .get_display_name()
-            .or_else(|| self.get_prefix_username())
-            .unwrap_or("unknown_user")
-            .to_string();
-        let sender_user_id = self.get_tag_value("user-id").map(str::to_string);
-        let badges_str = self.get_tag_value("badges").map(str::to_string);
-        let message_id = self.get_tag_value("id").map(str::to_string);
-
-        let is_moderator = self.get_tag_value("mod") == Some("1")
-            || badges_str
-                .as_ref()
-                .map_or(false, |b| b.contains("moderator"));
-        let is_subscriber = self.get_tag_value("subscriber") == Some("1")
-            || self
-                .get_tag_value("badges")
-                .map_or(false, |b| b.contains("subscriber/"));
-
-        let mut raw_tags_map = HashMap::new();
-        if let Some(tags_str) = self.tags {
-            for component in tags_str.split(';') {
-                let mut parts = component.splitn(2, '=');
-                if let Some(key) = parts.next() {
-                    raw_tags_map.insert(key.to_string(), parts.next().unwrap_or("").to_string());
-                }
-            }
-        }
-
-        Some(ParsedTwitchMessage {
-            channel: channel_name_str.to_string(),
-            sender_username,
-            sender_user_id,
-            text, // Use the cleaned text here
-            badges: badges_str,
-            is_moderator,
-            is_subscriber,
-            message_id,
-            raw_irc_tags: if raw_tags_map.is_empty() {
-                None
-            } else {
-                Some(raw_tags_map)
-            },
-            timestamp: Utc::now(),
-        })
+        respond_to_rx.await.map_err(|e| {
+            TwitchError::ActorComm(format!(
+                "Manager failed to respond to UnsubscribeFromChannel: {}",
+                e
+            ))
+        })?
     }
 }
 
-// --- TwitchChannelActor: Messages, Handle, and Struct ---
+// --- TwitchChatManagerActor Struct ---
+struct ChannelActorState {
+    handle: TwitchChannelActorHandle,
+}
+
+struct TwitchChatManagerActor {
+    receiver: mpsc::Receiver<TwitchChatManagerMessage>,
+    active_channels: HashMap<String, ChannelActorState>,
+    app_oauth_token: Arc<String>,
+    channel_actor_buffer_size: usize,
+    self_sender: mpsc::Sender<TwitchChatManagerMessage>,
+}
+
+impl TwitchChatManagerActor {
+    fn new(
+        receiver: mpsc::Receiver<TwitchChatManagerMessage>,
+        app_oauth_token: Arc<String>,
+        channel_actor_buffer_size: usize,
+        self_sender: mpsc::Sender<TwitchChatManagerMessage>,
+    ) -> Self {
+        Self {
+            receiver,
+            active_channels: HashMap::new(),
+            app_oauth_token,
+            channel_actor_buffer_size,
+            self_sender,
+        }
+    }
+
+    async fn handle_message(&mut self, msg: TwitchChatManagerMessage) {
+        match msg {
+            TwitchChatManagerMessage::SubscribeToChannel {
+                channel_name,
+                lobby_id,
+                twitch_message_tx_for_lobby,
+                respond_to,
+            } => {
+                let normalized_channel_name = channel_name.to_lowercase();
+                tracing::info!(
+                    "[TWITCH_MANAGER] Received subscription request for channel '{}' from lobby '{}'",
+                    normalized_channel_name,
+                    lobby_id
+                );
+
+                let mut create_new_actor = true;
+                let mut obtained_actor_handle: Option<TwitchChannelActorHandle> = None;
+
+                if let Some(existing_state) = self.active_channels.get(&normalized_channel_name) {
+                    let current_status =
+                        existing_state.handle.get_status_receiver().borrow().clone();
+
+                    if matches!(current_status, TwitchChannelConnectionStatus::Terminated) {
+                        tracing::info!(
+                            "[TWITCH_MANAGER] Existing TwitchChannelActor for '{}' is Terminated. Removing stale handle and will create a new one.",
+                            normalized_channel_name
+                        );
+                        self.active_channels.remove(&normalized_channel_name);
+                    } else {
+                        tracing::debug!(
+                            "[TWITCH_MANAGER] Found existing and non-Terminated TwitchChannelActor for '{}' (Status: {:?}). Reusing.",
+                            normalized_channel_name,
+                            current_status
+                        );
+                        obtained_actor_handle = Some(existing_state.handle.clone());
+                        create_new_actor = false;
+                    }
+                }
+
+                if create_new_actor {
+                    tracing::info!(
+                        "[TWITCH_MANAGER] Creating new TwitchChannelActor for '{}'.",
+                        normalized_channel_name
+                    );
+
+                    let (new_handle, join_handle) = TwitchChannelActorHandle::new(
+                        normalized_channel_name.clone(),
+                        Arc::clone(&self.app_oauth_token),
+                        self.channel_actor_buffer_size,
+                    );
+
+                    self.active_channels.insert(
+                        normalized_channel_name.clone(),
+                        ChannelActorState {
+                            handle: new_handle.clone(),
+                        },
+                    );
+
+                    let manager_tx = self.self_sender.clone();
+                    let channel_name_for_monitor = normalized_channel_name.clone();
+                    tokio::spawn(async move {
+                        match join_handle.await {
+                            Ok(termination_info) => {
+                                let _ = manager_tx
+                                    .send(TwitchChatManagerMessage::ChannelActorCompleted {
+                                        channel_name: channel_name_for_monitor.clone(),
+                                        termination_info,
+                                    })
+                                    .await;
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "[TWITCH_MANAGER] Channel actor '{}' panicked: {:?}",
+                                    channel_name_for_monitor,
+                                    e
+                                );
+                            }
+                        }
+                    });
+
+                    obtained_actor_handle = Some(new_handle);
+                }
+
+                if let Some(final_actor_handle) = obtained_actor_handle {
+                    match final_actor_handle
+                        .add_subscriber(lobby_id, twitch_message_tx_for_lobby)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!(
+                                "[TWITCH_MANAGER] Successfully subscribed lobby '{}' to channel '{}'",
+                                lobby_id,
+                                normalized_channel_name
+                            );
+                            let _ = respond_to.send(Ok(final_actor_handle.get_status_receiver()));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "[TWITCH_MANAGER] Failed to subscribe lobby '{}' to channel '{}': {:?}",
+                                lobby_id,
+                                normalized_channel_name,
+                                e
+                            );
+                            let _ = respond_to.send(Err(e));
+                        }
+                    }
+                } else {
+                    let error_msg = format!(
+                        "Internal error: Failed to obtain or create actor handle for channel '{}'",
+                        normalized_channel_name
+                    );
+                    tracing::error!("[TWITCH_MANAGER] {}", error_msg);
+                    let _ = respond_to.send(Err(TwitchError::InternalActorError(error_msg)));
+                }
+            }
+
+            TwitchChatManagerMessage::UnsubscribeFromChannel {
+                channel_name,
+                lobby_id,
+                respond_to,
+            } => {
+                let normalized_channel_name = channel_name.to_lowercase();
+                tracing::info!(
+                    "[TWITCH_MANAGER] Received unsubscribe request for channel '{}' from lobby '{}'",
+                    normalized_channel_name,
+                    lobby_id
+                );
+
+                if let Some(channel_state) = self.active_channels.get(&normalized_channel_name) {
+                    match channel_state.handle.remove_subscriber(lobby_id).await {
+                        Ok(_) => {
+                            tracing::info!(
+                                "[TWITCH_MANAGER] Successfully unsubscribed lobby '{}' from channel '{}'",
+                                lobby_id,
+                                normalized_channel_name
+                            );
+                            let _ = respond_to.send(Ok(()));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "[TWITCH_MANAGER] Failed to unsubscribe lobby '{}' from channel '{}': {:?}",
+                                lobby_id,
+                                normalized_channel_name,
+                                e
+                            );
+                            let _ = respond_to.send(Err(e));
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        "[TWITCH_MANAGER] Cannot unsubscribe lobby '{}': Channel '{}' not found or not active.",
+                        lobby_id,
+                        normalized_channel_name
+                    );
+                    let _ = respond_to.send(Err(TwitchError::ChannelActorTerminated(
+                        normalized_channel_name,
+                    )));
+                }
+            }
+
+            TwitchChatManagerMessage::ChannelActorCompleted {
+                channel_name,
+                termination_info,
+            } => {
+                let normalized_channel_name = channel_name.to_lowercase();
+                tracing::info!(
+                    "[TWITCH_MANAGER] Channel actor '{}' (ID: {}) completed with status: {:?}",
+                    normalized_channel_name,
+                    termination_info.actor_id,
+                    termination_info.final_status
+                );
+
+                if self
+                    .active_channels
+                    .remove(&normalized_channel_name)
+                    .is_some()
+                {
+                    tracing::debug!(
+                        "[TWITCH_MANAGER] Removed completed channel '{}'.",
+                        normalized_channel_name
+                    );
+                } else {
+                    tracing::warn!(
+                        "[TWITCH_MANAGER] Channel '{}' was already removed from active channels.",
+                        normalized_channel_name
+                    );
+                }
+            }
+        }
+    }
+}
+
+async fn run_twitch_chat_manager_actor(mut actor: TwitchChatManagerActor) {
+    tracing::info!("[TWITCH_MANAGER] Twitch Chat Manager Actor started.");
+    while let Some(msg) = actor.receiver.recv().await {
+        actor.handle_message(msg).await;
+    }
+    tracing::info!("[TWITCH_MANAGER] Twitch Chat Manager Actor stopped.");
+}
+
+// --- TwitchChannelActor Messages ---
 #[derive(Debug)]
 pub enum TwitchChannelActorMessage {
     AddSubscriber {
         lobby_id: Uuid,
         subscriber_tx: mpsc::Sender<ParsedTwitchMessage>,
-        respond_to: oneshot::Sender<Result<()>>,
+        respond_to: oneshot::Sender<TwitchResult<()>>,
     },
     RemoveSubscriber {
         lobby_id: Uuid,
@@ -315,7 +385,6 @@ impl TwitchChannelActorHandle {
             actor_tx.clone(),
             channel_name.clone(),
             oauth_token,
-            // REMOVED: manager_handle parameter
             status_tx.clone(),
         );
 
@@ -334,7 +403,7 @@ impl TwitchChannelActorHandle {
         &self,
         lobby_id: Uuid,
         subscriber_tx: mpsc::Sender<ParsedTwitchMessage>,
-    ) -> Result<()> {
+    ) -> TwitchResult<()> {
         let (respond_to_tx, respond_to_rx) = oneshot::channel();
         self.sender
             .send(TwitchChannelActorMessage::AddSubscriber {
@@ -350,7 +419,7 @@ impl TwitchChannelActorHandle {
             .map_err(|e| TwitchError::ActorComm(format!("AddSubscriber response error: {}", e)))?
     }
 
-    pub async fn remove_subscriber(&self, lobby_id: Uuid) -> Result<()> {
+    pub async fn remove_subscriber(&self, lobby_id: Uuid) -> TwitchResult<()> {
         let (respond_to_tx, respond_to_rx) = oneshot::channel();
         self.sender
             .send(TwitchChannelActorMessage::RemoveSubscriber {
@@ -367,7 +436,7 @@ impl TwitchChannelActorHandle {
             .map_err(|e| TwitchError::ActorComm(format!("RemoveSubscriber response error: {}", e)))
     }
 
-    pub async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(&self) -> TwitchResult<()> {
         self.sender
             .send(TwitchChannelActorMessage::Shutdown)
             .await
@@ -435,7 +504,6 @@ impl TwitchChannelActor {
                 );
                 self.subscribers.insert(lobby_id, subscriber_tx);
 
-                // Check if the IRC task needs to be started/restarted.
                 let task_is_truly_stopped_or_never_started = self
                     .irc_connection_task_handle
                     .as_ref()
@@ -452,7 +520,6 @@ impl TwitchChannelActor {
                         self.channel_name,
                         self.actor_id
                     );
-                    // Actor is shutting down, new subscriptions are not meaningful.
                     let _ = respond_to.send(Err(TwitchError::ChannelActorTerminated(
                         self.channel_name.clone(),
                     )));
@@ -462,12 +529,9 @@ impl TwitchChannelActor {
                         self.channel_name,
                         self.actor_id
                     );
-                    self.start_irc_connection_task(); // This will handle logic for existing finished handles.
+                    self.start_irc_connection_task();
                     let _ = respond_to.send(Ok(()));
                 } else {
-                    // Task exists and is not finished, and actor is not terminated.
-                    // This means it's either Connected, Connecting, Authenticating, or Reconnecting.
-                    // No need to start a new task.
                     tracing::debug!(
                         "[TWITCH][ACTOR][{}][{}] IRC task is active (status: {:?}, handle exists and not finished). Not starting new task.",
                         self.channel_name,
@@ -528,9 +592,9 @@ impl TwitchChannelActor {
                     }
                 } else {
                     if !line.trim().is_empty()
-                        && (irc_msg.command.is_some() || irc_msg.prefix.is_some())
+                        && (irc_msg.command().is_some() || irc_msg.prefix().is_some())
                         && !matches!(
-                            irc_msg.command,
+                            irc_msg.command(),
                             Some("PING")
                                 | Some("PONG")
                                 | Some("CAP")
@@ -564,8 +628,6 @@ impl TwitchChannelActor {
                 }
             }
             TwitchChannelActorMessage::InternalConnectionStatusChanged { new_status } => {
-                // Store old status for comparison if needed, though not strictly used in this revised logic
-                // let old_status = self.status_tx.borrow().clone();
                 update_channel_status(
                     &self.channel_name,
                     self.actor_id,
@@ -582,14 +644,10 @@ impl TwitchChannelActor {
                             reason
                         );
 
-                        // Check if the JoinHandle itself indicates the task has exited.
-                        // This is important because run_irc_connection_loop might send Disconnected
-                        // for a failed attempt but intends to retry. The JoinHandle is for the whole loop.
-                        // If the loop *itself* has exited, then the JoinHandle will be finished.
                         let irc_loop_task_has_exited = self
                             .irc_connection_task_handle
                             .as_ref()
-                            .map_or(true, |h| h.is_finished()); // True if no handle or handle is finished
+                            .map_or(true, |h| h.is_finished());
 
                         if irc_loop_task_has_exited {
                             tracing::info!(
@@ -597,14 +655,11 @@ impl TwitchChannelActor {
                                 self.channel_name,
                                 self.actor_id
                             );
-                            // Clear the handle since the task it refers to is gone.
                             self.irc_connection_task_handle.take();
-                            self.irc_task_shutdown_tx.take(); // Also clear the shutdown sender.
+                            self.irc_task_shutdown_tx.take();
 
-                            // Now decide if the actor itself should shut down.
                             if reason.contains("Persistent Auth Failure")
                                 || reason.contains("Actor channel closed")
-                            // Should not happen if actor_tx is used by loop
                             {
                                 tracing::error!(
                                     "[TWITCH][ACTOR][{}][{}] Critical IRC error after loop exit: '{}'. Actor shutting down.",
@@ -622,10 +677,6 @@ impl TwitchChannelActor {
                                 );
                                 self.initiate_actor_shutdown().await;
                             } else {
-                                // IRC loop exited, but there are subscribers. This implies something external
-                                // stopped the loop (like a shutdown signal it obeyed), or it encountered an
-                                // unrecoverable error not caught as "critical" above.
-                                // We should attempt to restart the IRC task for the existing subscribers.
                                 tracing::warn!(
                                     "[TWITCH][ACTOR][{}][{}] IRC loop exited (reason: '{}') but actor has subscribers. Attempting to restart IRC task.",
                                     self.channel_name,
@@ -635,8 +686,6 @@ impl TwitchChannelActor {
                                 self.start_irc_connection_task();
                             }
                         } else {
-                            // IRC task is still running (e.g., run_irc_connection_loop sent Disconnected for a failed *attempt* but will retry).
-                            // The actor should stay alive. The loop will manage further status updates.
                             tracing::debug!(
                                 "[TWITCH][ACTOR][{}][{}] IRC connection attempt failed (reason: '{}'), but IRC loop is still active and will retry. Actor remains active.",
                                 self.channel_name,
@@ -646,7 +695,6 @@ impl TwitchChannelActor {
                         }
                     }
                     TwitchChannelConnectionStatus::Terminated => {
-                        // Actor is already shutting down or has shut down. Clean up task handles just in case.
                         if let Some(handle) = self.irc_connection_task_handle.take() {
                             if !handle.is_finished() {
                                 handle.abort();
@@ -655,13 +703,12 @@ impl TwitchChannelActor {
                         self.irc_task_shutdown_tx.take();
                     }
                     _ => {
-                        // Other statuses (Connecting, Authenticating, Connected, Reconnecting)
-                        // imply the IRC loop is active or trying. No specific actor shutdown action.
+                        // Other statuses imply the IRC loop is active or trying
                     }
                 }
             }
             TwitchChannelActorMessage::Shutdown => {
-                self.initiate_actor_shutdown().await; // Changed from stop_irc_connection_task_and_shutdown_actor
+                self.initiate_actor_shutdown().await;
             }
         }
     }
@@ -684,7 +731,6 @@ impl TwitchChannelActor {
     }
 
     fn start_irc_connection_task(&mut self) {
-        // Check if there's an existing handle and if the task it points to is still running.
         if let Some(handle) = &self.irc_connection_task_handle {
             if !handle.is_finished() {
                 tracing::warn!(
@@ -694,7 +740,6 @@ impl TwitchChannelActor {
                 );
                 return;
             }
-            // If handle exists but task is finished, take it so we can replace it.
             tracing::debug!(
                 "[TWITCH][ACTOR][{}][{}] Existing IRC task handle is for a finished task. Clearing it.",
                 self.channel_name,
@@ -702,7 +747,6 @@ impl TwitchChannelActor {
             );
             self.irc_connection_task_handle.take();
         }
-        // If self.irc_connection_task_handle was None, or was Some but finished, it's now None.
 
         tracing::info!(
             "[TWITCH][ACTOR][{}][{}] Starting new IRC connection task.",
@@ -790,12 +834,10 @@ pub async fn run_twitch_channel_actor(mut actor: TwitchChannelActor) -> ChannelT
         actor_id
     );
 
-    // Main message loop
     while let Some(msg) = actor.receiver.recv().await {
         actor.handle_message(msg).await;
     }
 
-    // Cleanup
     actor.signal_irc_task_shutdown();
     actor.await_irc_task_completion().await;
 
@@ -808,7 +850,6 @@ pub async fn run_twitch_channel_actor(mut actor: TwitchChannelActor) -> ChannelT
         final_status
     );
 
-    // Return termination info instead of calling manager
     ChannelTerminationInfo {
         channel_name,
         actor_id,
@@ -816,7 +857,6 @@ pub async fn run_twitch_channel_actor(mut actor: TwitchChannelActor) -> ChannelT
     }
 }
 
-// --- IRC Connection Logic ---
 async fn run_irc_connection_loop(
     channel_name: String,
     oauth_token: Arc<String>,
@@ -856,7 +896,7 @@ async fn run_irc_connection_loop(
                 tracing::info!("[TWITCH][IRC_LOOP][{}][{}] Shutdown signal received. Terminating connection attempt.", channel_name, actor_id_for_logging);
                 let _ = actor_tx.send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
                     new_status: TwitchChannelConnectionStatus::Disconnected { reason: "Shutdown signal received".to_string() }
-                }).await; // Attempt to notify actor
+                }).await;
                 return;
             }
             res = connect_and_listen_irc_single_attempt_adapted(
@@ -889,7 +929,6 @@ async fn run_irc_connection_loop(
                 );
                 match e {
                     TwitchError::TwitchAuth(_) => {
-                        // For auth errors, send specific disconnected status and terminate loop. Actor will handle its own shutdown.
                         let _ = actor_tx
                             .send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
                                 new_status: TwitchChannelConnectionStatus::Disconnected {
@@ -910,11 +949,9 @@ async fn run_irc_connection_loop(
                             channel_name,
                             actor_id_for_logging
                         );
-                        // No need to send status, actor is already gone.
                         (e.to_string(), 0u64, true)
                     }
                     _ => {
-                        // Other errors, try to reconnect with backoff
                         let base_delay = 5u64;
                         let backoff_delay =
                             base_delay * 2u64.pow(reconnect_attempts.saturating_sub(1).min(6));
@@ -925,7 +962,7 @@ async fn run_irc_connection_loop(
         };
 
         if should_terminate_loop {
-            return; // Exit the IRC connection loop
+            return;
         }
 
         let reconnect_delay = Duration::from_secs(delay_seconds);
@@ -968,7 +1005,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
     actor_tx: mpsc::Sender<TwitchChannelActorMessage>,
     connection_attempt_count: u32,
     actor_id_for_logging: Uuid,
-) -> Result<()> {
+) -> TwitchResult<()> {
     let host = "irc.chat.twitch.tv";
     let port = 6667;
     let addr = format!("{}:{}", host, port);
@@ -1028,15 +1065,13 @@ async fn connect_and_listen_irc_single_attempt_adapted(
 
     let mut line_buffer = String::new();
 
-    // Connection health monitoring
     let mut last_server_activity = tokio::time::Instant::now();
     let mut last_health_check = tokio::time::Instant::now();
     let mut pending_health_check = false;
     let mut authenticated = false;
 
-    // Timeouts based on test results
-    let health_check_interval = Duration::from_secs(120); // Send health PING every 2 minutes
-    let health_check_timeout = Duration::from_secs(10); // Expect PONG within 10 seconds
+    let health_check_interval = Duration::from_secs(60); // Send health PING every 1 minute
+    let health_check_timeout = Duration::from_secs(10); // Expect PONG within 10 seconds  
     let server_activity_timeout = Duration::from_secs(400); // No server activity for 6.67 minutes = dead
     let read_timeout = Duration::from_secs(5); // Very short read timeout for responsive health checks
 
@@ -1045,11 +1080,9 @@ async fn connect_and_listen_irc_single_attempt_adapted(
     loop {
         line_buffer.clear();
 
-        // After authentication, perform connection health monitoring
         if authenticated {
             let now = tokio::time::Instant::now();
 
-            // Check if we should send a health check PING
             if !pending_health_check
                 && now.duration_since(last_health_check) >= health_check_interval
             {
@@ -1086,7 +1119,6 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 }
             }
 
-            // Check if pending health check has timed out
             if pending_health_check
                 && now.duration_since(health_check_start_time) >= health_check_timeout
             {
@@ -1102,7 +1134,6 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 )));
             }
 
-            // Check if we haven't seen any server activity in too long
             if now.duration_since(last_server_activity) >= server_activity_timeout {
                 tracing::warn!(
                     "[TWITCH][IRC_HEALTH][{}][{}] No server activity in {:?}. Connection appears dead.",
@@ -1117,7 +1148,6 @@ async fn connect_and_listen_irc_single_attempt_adapted(
             }
         }
 
-        // Read with short timeout for responsive health checking
         match tokio::time::timeout(read_timeout, buf_reader.read_line(&mut line_buffer)).await {
             Ok(Ok(0)) => {
                 tracing::info!(
@@ -1140,14 +1170,12 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 return Err(TwitchError::Io(e));
             }
             Err(_) => {
-                // Read timeout - continue loop to check health and try again
                 continue;
             }
         }
 
         let message_line_owned = line_buffer.clone();
 
-        // Update server activity timestamp for any message
         if !message_line_owned.trim().is_empty() {
             last_server_activity = tokio::time::Instant::now();
 
@@ -1166,10 +1194,10 @@ async fn connect_and_listen_irc_single_attempt_adapted(
 
         let parsed_for_task_logic = IrcMessage::parse(&message_line_owned);
 
-        match parsed_for_task_logic.command {
+        match parsed_for_task_logic.command() {
             Some("PING") => {
                 let pong_target = parsed_for_task_logic
-                    .params
+                    .params()
                     .get(0)
                     .unwrap_or(&":tmi.twitch.tv");
 
@@ -1186,9 +1214,8 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                 writer.flush().await.map_err(TwitchError::Io)?;
             }
             Some("PONG") => {
-                // Check if this is a response to our health check
                 let pong_content = parsed_for_task_logic
-                    .params
+                    .params()
                     .get(1)
                     .map(|s| &**s)
                     .unwrap_or("");
@@ -1219,7 +1246,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                     actor_id_for_logging
                 );
 
-                authenticated = true; // Enable health monitoring
+                authenticated = true;
 
                 if actor_tx
                     .send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
@@ -1243,7 +1270,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                     .get_prefix_username()
                     .unwrap_or_default();
                 let joined_chan = parsed_for_task_logic
-                    .params
+                    .params()
                     .get(0)
                     .map(|s| s.trim_start_matches('#'))
                     .unwrap_or_default();
@@ -1262,7 +1289,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
             Some("NOTICE") => {
                 let notice_text = parsed_for_task_logic
                     .get_privmsg_text_content()
-                    .or_else(|| parsed_for_task_logic.params.get(1).map(|v| &**v))
+                    .or_else(|| parsed_for_task_logic.params().get(1).map(|v| &**v))
                     .unwrap_or_default();
 
                 if notice_text.contains("Login authentication failed")
@@ -1290,12 +1317,12 @@ async fn connect_and_listen_irc_single_attempt_adapted(
             }
             Some("CAP") => {
                 let ack_type = parsed_for_task_logic
-                    .params
+                    .params()
                     .get(1)
                     .copied()
                     .unwrap_or_default();
                 let capabilities = parsed_for_task_logic
-                    .params
+                    .params()
                     .get(2)
                     .copied()
                     .unwrap_or_default();
@@ -1320,7 +1347,6 @@ async fn connect_and_listen_irc_single_attempt_adapted(
     }
 }
 
-// --- Standalone function to update status and log ---
 fn update_channel_status(
     channel_name: &str,
     actor_id: Uuid,
