@@ -39,7 +39,6 @@ pub async fn refresh_words_handler(
 ) -> WebResult<StatusCode> {
     tracing::info!("HTTP: Received refresh_words request");
 
-    // admin_api_key is guaranteed to be non-empty if the app started.
     let expected_key = &app_state.server_config.admin_api_key;
 
     match headers.get(http::header::AUTHORIZATION) {
@@ -55,7 +54,6 @@ pub async fn refresh_words_handler(
                 tracing::info!(
                     "Admin API Key (ApiKey scheme) validated successfully for refresh_words."
                 );
-                // Authorized, proceed to the action
             } else {
                 tracing::warn!(
                     "Unauthorized attempt to refresh words: Authorization header format incorrect. Expected 'ApiKey <key>'."
@@ -73,7 +71,6 @@ pub async fn refresh_words_handler(
         }
     }
 
-    // If we reach here, authentication was successful.
     app_state
         .word_list_manager
         .refresh_med_andra_ord_words()

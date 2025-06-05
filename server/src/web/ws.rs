@@ -24,7 +24,6 @@ pub async fn ws_handler(
 pub async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // --- Initial Handshake Phase ---
     let lobby_handle: LobbyActorHandle;
     let client_id: Uuid;
 
