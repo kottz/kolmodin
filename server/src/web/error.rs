@@ -16,6 +16,8 @@ pub enum WebError {
     WebSocketHandshake(String),
     #[error("JSON serialization error: {0}")]
     JsonSerialization(#[from] serde_json::Error),
+    #[error("Unauthorized: {0}")] // New error
+    Unauthorized(String),
 }
 
 impl IntoResponse for WebError {
@@ -33,6 +35,7 @@ impl IntoResponse for WebError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("JSON error: {}", err),
             ),
+            WebError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()), // New mapping
         };
 
         let body = Json(json!({

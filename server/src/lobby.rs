@@ -28,12 +28,6 @@ pub struct LobbyDetails {
     pub twitch_channel_subscribed: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Default)]
-pub struct CreateLobbyRequest {
-    pub game_type: Option<String>,
-    pub twitch_channel: Option<String>,
-}
-
 #[derive(Debug)]
 pub enum LobbyManagerMessage {
     CreateLobby {

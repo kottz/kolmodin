@@ -1,15 +1,14 @@
-// src/config.rs
-
 use crate::error::{ConfigError, Result as AppResult};
 use crate::game_logic::GameType;
-use config::{Config, Environment, Value, ValueKind};
+use config::{Config, Environment, Value, ValueKind}; // ValueKind is used
 use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub port: u16,
     pub cors_origins: Vec<String>,
+    pub admin_api_key: String, // Changed: Now required, not Option<String>
 }
 
 #[derive(Debug, Deserialize)]
@@ -18,7 +17,7 @@ pub struct TwitchConfig {
     pub client_secret: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)] // GamesConfig was already Clone
 pub struct GamesConfig {
     #[serde(deserialize_with = "deserialize_string_or_list_to_set_lowercase")]
     pub enabled_types: HashSet<String>,
@@ -39,10 +38,10 @@ impl Default for GamesConfig {
 pub enum WordListSourceType {
     File,
     Http,
-    None, // Explicitly no source, game will use empty/default list
+    None,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct MedAndraOrdWordsConfig {
     pub source_type: WordListSourceType,
     pub file_path: Option<String>,
@@ -52,14 +51,14 @@ pub struct MedAndraOrdWordsConfig {
 impl Default for MedAndraOrdWordsConfig {
     fn default() -> Self {
         Self {
-            source_type: WordListSourceType::File,    // Default to file
-            file_path: Some("words.txt".to_string()), // Default file name
+            source_type: WordListSourceType::File,
+            file_path: Some("words.txt".to_string()),
             http_url: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     #[serde(default)]
     pub med_andra_ord_words: MedAndraOrdWordsConfig,
@@ -83,17 +82,15 @@ pub struct AppSettings {
 }
 
 pub fn load_settings() -> AppResult<AppSettings> {
-    // Set default for games.enabled_types
     let default_games_enabled_types: Vec<Value> = GameType::all()
         .iter()
         .map(|game_type| Value::new(None, ValueKind::String(game_type.primary_id().to_string())))
         .collect();
 
-    // Set default for database.med_andra_ord_words
     let default_db_mao_source_type = Value::new(None, ValueKind::String("file".to_string()));
     let default_db_mao_file_path = Value::new(None, ValueKind::String("words.txt".to_string()));
 
-    let settings = Config::builder()
+    let settings_builder = Config::builder()
         .add_source(
             Environment::with_prefix("KOLMODIN")
                 .separator("__")
@@ -102,17 +99,19 @@ pub fn load_settings() -> AppResult<AppSettings> {
                 .with_list_parse_key("games.enabled_types")
                 .try_parsing(true),
         )
-        // Defaults for top-level required fields if not in Env
+        // Set defaults for fields that can have them.
+        // `server.admin_api_key` is now required, so no default here.
+        // If not provided via ENV, deserialization will fail.
         .set_default("server.port", 8080)?
         .set_default("server.cors_origins", Vec::<String>::new())?
-        .set_default("twitch.client_id", "")? // Placeholder, must be set in env
-        .set_default("twitch.client_secret", "")? // Placeholder, must be set in env
-        // Defaults for games
+        // `twitch.client_id` and `secret` are also effectively required,
+        // as they are checked later.
+        .set_default("twitch.client_id", "")?
+        .set_default("twitch.client_secret", "")?
         .set_default(
             "games.enabled_types",
             Value::new(None, ValueKind::Array(default_games_enabled_types)),
         )?
-        // Defaults for database
         .set_default(
             "database.med_andra_ord_words.source_type",
             default_db_mao_source_type,
@@ -124,15 +123,32 @@ pub fn load_settings() -> AppResult<AppSettings> {
         .set_default(
             "database.med_andra_ord_words.http_url",
             Value::new(None, ValueKind::Nil),
-        )? // None
+        )?;
+
+    let settings = settings_builder
         .build()
         .map_err(|e| ConfigError::Load(e.to_string()))?;
 
-    let app_settings: AppSettings = settings
-        .try_deserialize()
-        .map_err(|e| ConfigError::Load(e.to_string()))?;
+    // Attempt to deserialize. This will fail if required fields (like admin_api_key) are missing.
+    let app_settings: AppSettings = settings.try_deserialize().map_err(|e| {
+        // Provide a more helpful error message if admin_api_key is likely the cause
+        if e.to_string().contains("admin_api_key") {
+            ConfigError::Missing(
+                "server.admin_api_key (must be set via KOLMODIN_SERVER__ADMIN_API_KEY env var)"
+                    .to_string(),
+            )
+        } else {
+            ConfigError::Load(e.to_string())
+        }
+    })?;
 
-    // Validate specific settings
+    // --- Post-deserialization validation ---
+    if app_settings.server.admin_api_key.is_empty() {
+        return Err(ConfigError::InvalidValue(
+            "server.admin_api_key must not be empty".to_string(),
+        )
+        .into());
+    }
     if app_settings.twitch.client_id.is_empty() {
         return Err(ConfigError::Missing("twitch.client_id".to_string()).into());
     }
@@ -162,11 +178,12 @@ pub fn load_settings() -> AppResult<AppSettings> {
                 .into());
             }
         }
-        WordListSourceType::None => { /* No path/url needed */ }
+        WordListSourceType::None => {}
     }
 
     Ok(app_settings)
 }
+// ... (deserialize_string_or_list_to_set_lowercase remains the same)
 
 fn deserialize_string_or_list_to_set_lowercase<'de, D>(
     deserializer: D,
@@ -184,7 +201,6 @@ where
         Value::String(s) => {
             let trimmed = s.trim().to_lowercase();
             if trimmed == "all" {
-                // Enable all available games
                 for game_type in GameType::all() {
                     set.insert(game_type.primary_id().to_string());
                 }

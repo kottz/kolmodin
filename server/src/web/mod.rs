@@ -1,24 +1,24 @@
-// src/web/mod.rs
-
 use axum::{
     Router,
-    routing::{any, get, post}, // Added get
+    routing::{any, get, post},
 };
 use http::HeaderValue;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 
 use crate::config::ServerConfig;
-use crate::error::Result as AppResult;
+use crate::error::Result as AppResult; // This is fine, AppResult is from crate::error
 use crate::state::AppState;
 
-pub mod error;
+pub mod error; // This makes src/web/error.rs a submodule
 pub mod handlers;
 pub mod ws;
 
-pub use error::{Result as WebResult, WebError};
+// Correctly re-export from the submodule `error` (which is src/web/error.rs)
+pub use self::error::{Result as WebResult, WebError}; // Use `self::error`
 
 pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> AppResult<()> {
+    // ... (rest of the function is fine)
     let cors_origins_result: Result<Vec<HeaderValue>, _> = server_config
         .cors_origins
         .iter()
@@ -31,13 +31,13 @@ pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> App
 
     let cors_origins = cors_origins_result.unwrap_or_else(|e| {
         tracing::error!("CORS config error: {}. Defaulting to restrictive.", e);
-        vec![] // Fallback to restrictive (or a known safe default)
+        vec![]
     });
 
     let cors = if !cors_origins.is_empty() {
         CorsLayer::new()
             .allow_methods(vec![http::Method::GET, http::Method::POST])
-            .allow_origin(cors_origins) // Use the parsed origins
+            .allow_origin(cors_origins)
             .allow_credentials(true)
             .allow_headers(vec![
                 http::header::CONTENT_TYPE,
@@ -45,17 +45,13 @@ pub async fn run_server(app_state: AppState, server_config: ServerConfig) -> App
                 http::header::ACCEPT,
             ])
     } else {
-        // More restrictive default if no origins are specified or parsing failed.
-        // This might block frontend access if it's not from the same origin.
-        // Or, for development, you might default to allow_any_origin if server_config.cors_origins is empty
-        // and it's a development environment.
         tracing::warn!("No valid CORS origins configured. Applying restrictive CORS policy.");
-        CorsLayer::new() // Default, possibly restrictive
+        CorsLayer::new()
     };
 
     let app = Router::new()
         .route("/api/create-lobby", post(handlers::create_lobby_handler))
-        .route("/api/refresh-words", get(handlers::refresh_words_handler)) // New route
+        .route("/api/refresh-words", get(handlers::refresh_words_handler))
         .route("/ws", any(ws::ws_handler))
         .with_state(app_state)
         .layer(cors);
