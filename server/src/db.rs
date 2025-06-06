@@ -57,7 +57,7 @@ impl DataFileParser {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|s| s.trim().to_lowercase())
+            .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
@@ -172,7 +172,7 @@ impl WordListManager {
 
         let words: Vec<String> = content
             .lines()
-            .map(|line| line.trim().to_lowercase())
+            .map(|line| line.trim().to_string())
             .filter(|line| !line.is_empty())
             .collect();
 
