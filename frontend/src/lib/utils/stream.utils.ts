@@ -10,7 +10,7 @@ export class StreamEventManager {
 		this.maxEvents = maxEvents;
 	}
 
-	addEvent(type: string, data: any, duration?: number): void {
+	addEvent(type: string, data: unknown, duration?: number): void {
 		const event: StreamEvent = {
 			type,
 			data,
@@ -131,10 +131,10 @@ export const createStreamEvent = {
 };
 
 // Utility function to filter sensitive data from game state
-export function createPublicStateFilter<T extends Record<string, any>>(
+export function createPublicStateFilter<T extends Record<string, unknown>>(
 	fullState: T,
 	publicFields: (keyof T)[],
-	transformations?: Partial<Record<keyof T, (value: any) => any>>
+	transformations?: Partial<Record<keyof T, (value: unknown) => unknown>>
 ): Partial<T> {
 	const publicState: Partial<T> = {};
 
@@ -165,7 +165,7 @@ export function createPublicLeaderboard(
 // Mixin function to add streaming capabilities to existing game stores
 export function addStreamingCapabilities<T extends object>(
 	store: T,
-	getPublicStateFn: () => any,
+	getPublicStateFn: () => unknown,
 	shouldBroadcastFn?: () => boolean
 ): T &
 	Pick<
@@ -181,12 +181,12 @@ export function addStreamingCapabilities<T extends object>(
 		clearStreamEvents: () => eventManager.clearEvents(),
 		shouldBroadcastUpdate: shouldBroadcastFn || (() => true),
 		// Add helper method to add stream events
-		addStreamEvent: (type: string, data: any, duration?: number) => {
+		addStreamEvent: (type: string, data: unknown, duration?: number) => {
 			eventManager.addEvent(type, data, duration);
 		}
 	} as T &
 		Pick<
 			StreamableGameStore,
 			'getPublicState' | 'getStreamEvents' | 'clearStreamEvents' | 'shouldBroadcastUpdate'
-		> & { addStreamEvent: (type: string, data: any, duration?: number) => void };
+		> & { addStreamEvent: (type: string, data: unknown, duration?: number) => void };
 }

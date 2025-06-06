@@ -3,7 +3,7 @@
 // Stream event for animations and special notifications
 export interface StreamEvent {
 	type: string;
-	data: any;
+	data: unknown;
 	duration?: number; // How long to show this event (ms)
 	timestamp?: number;
 }
@@ -17,7 +17,7 @@ interface BaseBroadcastMessage {
 export interface StateUpdateMessage extends BaseBroadcastMessage {
 	type: 'STATE_UPDATE';
 	gameType: string;
-	state: any; // The public state for the specific game
+	state: unknown; // The public state for the specific game
 }
 
 // Stream event message (for animations, notifications, etc.)
@@ -49,7 +49,7 @@ export type BroadcastMessage =
 // Interface that game stores should implement for streaming
 export interface StreamableGameStore {
 	// Get the public state safe for streaming
-	getPublicState(): any;
+	getPublicState(): unknown;
 
 	// Get any pending stream events
 	getStreamEvents?(): StreamEvent[];
@@ -63,7 +63,7 @@ export interface StreamableGameStore {
 
 // Generic public game state structure (games can extend this)
 export interface BasePublicGameState {
-	phase: any; // Game phase info (usually safe to share)
+	phase: { type: string; data?: unknown }; // Game phase info (usually safe to share)
 	// Games will add their own public fields
 }
 
@@ -71,7 +71,7 @@ export interface BasePublicGameState {
 export interface StreamWindowState {
 	isVisible: boolean;
 	currentGameType: string | null;
-	gameState: any | null;
+	gameState: unknown | null;
 	activeEvents: StreamEvent[];
 	lastUpdateTimestamp: number;
 }
