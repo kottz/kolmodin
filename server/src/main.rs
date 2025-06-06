@@ -35,7 +35,6 @@ async fn main() -> AppResult<()> {
         .init();
 
     let app_settings = load_settings()?;
-    tracing::info!("Configuration loaded: {:?}", app_settings);
 
     let word_list_manager = Arc::new(WordListManager::new(app_settings.database.clone()).await?);
     tracing::info!("WordListManager initialized.");
