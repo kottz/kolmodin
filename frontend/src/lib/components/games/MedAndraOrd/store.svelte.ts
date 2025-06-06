@@ -1,6 +1,6 @@
 // src/lib/components/games/MedAndraOrd/store.svelte.ts
 
-import { registerGameStore } from '$lib/services/game.event.router';
+import { registerGameStore, broadcastCurrentGameState } from '$lib/services/game.event.router';
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
 import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
 import type { MedAndraOrdGameState, GameEventData, MedAndraOrdCommandData } from './types';
@@ -140,23 +140,48 @@ function createMedAndraOrdStore() {
 	function getPublicState(): MedAndraOrdPublicState {
 		const publicLeaderboard = createPublicLeaderboard(gameState.player_scores, 10);
 
-		return {
+		// Create a clean, serializable object
+		const publicState: MedAndraOrdPublicState = {
 			phase: {
 				type: gameState.phase.type,
-				// Don't include the actual word in public state!
-				data: gameState.phase.type === 'Playing' ? { hasWord: true } : gameState.phase.data
+				// Ensure data is serializable
+				data:
+					gameState.phase.type === 'Playing'
+						? { hasWord: true }
+						: gameState.phase.type === 'GameOver' && gameState.phase.data
+							? { winner: gameState.phase.data.winner }
+							: undefined
 			},
 			targetPoints: gameState.target_points,
 			gameDurationSeconds: gameState.game_duration_seconds,
 			pointLimitEnabled: gameState.point_limit_enabled,
 			timeLimitEnabled: gameState.time_limit_enabled,
 			leaderboard: publicLeaderboard,
-			playersCount: Object.keys(gameState.player_scores).length,
-			...(gameState.phase.type === 'Playing' &&
-				gameState.time_limit_enabled && {
-					timeRemaining: clientTimer
-				})
+			playersCount: Object.keys(gameState.player_scores).length
 		};
+
+		// Add timeRemaining only if applicable
+		if (gameState.phase.type === 'Playing' && gameState.time_limit_enabled) {
+			publicState.timeRemaining = clientTimer;
+		}
+
+		// Ensure it's serializable by doing a test JSON parse/stringify
+		try {
+			JSON.parse(JSON.stringify(publicState));
+			return publicState;
+		} catch (error) {
+			console.error('MedAndraOrdStore: Public state is not serializable:', error);
+			// Return a minimal safe state
+			return {
+				phase: { type: gameState.phase.type },
+				targetPoints: gameState.target_points,
+				gameDurationSeconds: gameState.game_duration_seconds,
+				pointLimitEnabled: gameState.point_limit_enabled,
+				timeLimitEnabled: gameState.time_limit_enabled,
+				leaderboard: [],
+				playersCount: 0
+			};
+		}
 	}
 
 	function getStreamEvents(): StreamEvent[] {
@@ -191,6 +216,8 @@ function createMedAndraOrdStore() {
 				) {
 					startGameTimer();
 				}
+				// Broadcast state update to stream window
+				broadcastCurrentGameState();
 				break;
 
 			case 'WordChanged':
@@ -199,25 +226,32 @@ function createMedAndraOrdStore() {
 				streamEventManager.addEvent('WORD_CHANGED', { message: 'New word available!' }, 2000);
 				break;
 
-			case 'PlayerScored':
+			case 'PlayerScored': {
 				info(
 					`MedAndraOrdStore: ${eventPayload.data.player} scored! Points: ${eventPayload.data.points}`
 				);
 				gameState.player_scores[eventPayload.data.player] = eventPayload.data.points;
 
-				// Add celebration stream event
+				// Add celebration stream event with current word
+				const currentCorrectWord =
+					gameState.phase.type === 'Playing' ? gameState.phase.data.current_word : '';
 				streamEventManager.addEvent(
-					'PLAYER_SCORED',
+					'CORRECT_ANSWER',
 					{
 						player: eventPayload.data.player,
+						word: currentCorrectWord,
 						points: eventPayload.data.points,
-						message: `🎉 ${eventPayload.data.player} scored! 🎉`
+						message: `🎉 ${eventPayload.data.player} was correct! 🎉`
 					},
-					3000
+					4000
 				);
-				break;
 
-			case 'GamePhaseChanged':
+				// Broadcast state update to stream window (for leaderboard updates)
+				broadcastCurrentGameState();
+				break;
+			}
+
+			case 'GamePhaseChanged': {
 				info(`MedAndraOrdStore: Game phase changed to: ${eventPayload.data.new_phase.type}`);
 				const previousPhase = gameState.phase.type;
 				gameState.phase = eventPayload.data.new_phase;
@@ -229,7 +263,7 @@ function createMedAndraOrdStore() {
 						phaseMessage = 'Game Started! Start guessing!';
 						streamEventManager.addEvent('GAME_STARTED', { message: phaseMessage }, 3000);
 						break;
-					case 'GameOver':
+					case 'GameOver': {
 						const winnerName = eventPayload.data.new_phase.data?.winner;
 						phaseMessage = winnerName ? `🏆 ${winnerName} Wins! 🏆` : 'Game Over!';
 						streamEventManager.addEvent(
@@ -241,6 +275,7 @@ function createMedAndraOrdStore() {
 							5000
 						);
 						break;
+					}
 					case 'Setup':
 						phaseMessage = 'Setting up new game...';
 						streamEventManager.addEvent('GAME_RESET', { message: phaseMessage }, 2000);
@@ -258,7 +293,15 @@ function createMedAndraOrdStore() {
 				) {
 					resetGameTimer();
 				}
+
+				// Broadcast state update to stream window (critical for game over detection)
+				console.log(
+					'Broadcasting game phase change to stream window, new phase:',
+					eventPayload.data.new_phase.type
+				);
+				broadcastCurrentGameState();
 				break;
+			}
 
 			case 'GameTimeUpdate':
 				// Handle server time updates if implemented

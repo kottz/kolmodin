@@ -52,6 +52,10 @@ function createStreamStore() {
 
 	function handleStateUpdate(message: BroadcastMessage): void {
 		const stateMessage = message as StateUpdateMessage;
+		console.log(
+			`StreamStore: Received state update for ${stateMessage.gameType}`,
+			stateMessage.state
+		);
 		debug(`StreamStore: Received state update for ${stateMessage.gameType}`);
 
 		// Only update if this is for the current game or we should switch games
@@ -59,6 +63,10 @@ function createStreamStore() {
 			state.currentGameType = stateMessage.gameType;
 			state.gameState = stateMessage.state;
 			state.lastUpdateTimestamp = stateMessage.timestamp;
+			console.log(
+				'StreamStore: Updated game state, current phase:',
+				stateMessage.state?.phase?.type
+			);
 		}
 	}
 

@@ -5,7 +5,6 @@
 	import { Input } from '$lib/components/ui/input';
 	import Checkbox from '$lib/components/ui/checkbox.svelte';
 	import StreamControls from '$lib/components/ui/StreamControls.svelte';
-	import StreamDemoCard from '$lib/components/ui/StreamDemoCard.svelte';
 	import {
 		Card,
 		CardContent,
@@ -27,26 +26,36 @@
 	let pointLimitEnabled = $state(true);
 	let timeLimitEnabled = $state(false);
 
-	function handleSetTargetPoints() {
-		const points = parseInt(targetPointsInput);
-		if (!isNaN(points) && points > 0) {
-			medAndraOrdStore.actions.setTargetPoints(points);
-		}
-	}
-
-	function handleSetGameDuration() {
-		const seconds = parseInt(gameDurationInput);
-		if (!isNaN(seconds) && seconds > 0) {
-			medAndraOrdStore.actions.setGameDuration(seconds);
-		}
-	}
-
 	function handlePointLimitToggle() {
 		medAndraOrdStore.actions.setPointLimitEnabled(pointLimitEnabled);
 	}
 
 	function handleTimeLimitToggle() {
 		medAndraOrdStore.actions.setTimeLimitEnabled(timeLimitEnabled);
+	}
+
+	function handleStartGame() {
+		// Apply current settings before starting the game
+		if (pointLimitEnabled) {
+			const points = parseInt(targetPointsInput);
+			if (!isNaN(points) && points > 0) {
+				medAndraOrdStore.actions.setTargetPoints(points);
+			}
+		}
+
+		if (timeLimitEnabled) {
+			const seconds = parseInt(gameDurationInput);
+			if (!isNaN(seconds) && seconds > 0) {
+				medAndraOrdStore.actions.setGameDuration(seconds);
+			}
+		}
+
+		// Apply toggle states
+		medAndraOrdStore.actions.setPointLimitEnabled(pointLimitEnabled);
+		medAndraOrdStore.actions.setTimeLimitEnabled(timeLimitEnabled);
+
+		// Start the game
+		medAndraOrdStore.actions.startGame();
 	}
 
 	function formatTime(seconds: number): string {
@@ -119,26 +128,15 @@
 									onCheckedChange={handlePointLimitToggle}
 								/>
 								<div class="space-y-2">
-									<div class="flex gap-2">
-										<Input
-											id="target-points"
-											type="number"
-											min="1"
-											max="50"
-											bind:value={targetPointsInput}
-											placeholder="10"
-											class="flex-1"
-											disabled={!pointLimitEnabled}
-										/>
-										<Button
-											onclick={handleSetTargetPoints}
-											variant="outline"
-											size="sm"
-											disabled={!pointLimitEnabled}
-										>
-											Set
-										</Button>
-									</div>
+									<Input
+										id="target-points"
+										type="number"
+										min="1"
+										max="50"
+										bind:value={targetPointsInput}
+										placeholder="10"
+										disabled={!pointLimitEnabled}
+									/>
 								</div>
 							</div>
 
@@ -151,32 +149,19 @@
 									onCheckedChange={handleTimeLimitToggle}
 								/>
 								<div class="space-y-2">
-									<div class="flex gap-2">
-										<Input
-											id="game-duration"
-											type="number"
-											min="60"
-											max="1800"
-											bind:value={gameDurationInput}
-											placeholder="300"
-											class="flex-1"
-											disabled={!timeLimitEnabled}
-										/>
-										<Button
-											onclick={handleSetGameDuration}
-											variant="outline"
-											size="sm"
-											disabled={!timeLimitEnabled}
-										>
-											Set
-										</Button>
-									</div>
+									<Input
+										id="game-duration"
+										type="number"
+										min="60"
+										max="1800"
+										bind:value={gameDurationInput}
+										placeholder="300"
+										disabled={!timeLimitEnabled}
+									/>
 									<p class="text-muted-foreground text-xs">Duration in seconds (60-1800)</p>
 								</div>
 							</div>
-							<Button onclick={medAndraOrdStore.actions.startGame} class="w-full" size="lg">
-								Start Game
-							</Button>
+							<Button onclick={handleStartGame} class="w-full" size="lg">Start Game</Button>
 						{:else if currentPhase === 'Playing'}
 							<div class="flex flex-col gap-2">
 								<Button
@@ -204,9 +189,6 @@
 
 				<!-- Stream Controls Card -->
 				<StreamControls />
-
-				<!-- Stream Demo Card (for testing) -->
-				<StreamDemoCard />
 
 				<!-- Game Info -->
 				<Card>

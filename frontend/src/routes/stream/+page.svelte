@@ -121,24 +121,7 @@
 				</div>
 			{/if}
 
-			<!-- Stream Events Overlay -->
-			{#if streamStore.hasActiveEvents}
-				<div class="fixed top-4 right-4 z-50 max-w-sm space-y-2">
-					{#each state.activeEvents as event (event.timestamp)}
-						<div
-							class="animate-in slide-in-from-right rounded-lg border-l-4 border-blue-500 bg-white/90 p-4 shadow-lg backdrop-blur-sm duration-300"
-							style="--animate-duration: 300ms;"
-						>
-							<div class="mb-1 font-semibold text-gray-800">{event.type}</div>
-							{#if event.data}
-								<div class="text-sm text-gray-600">
-									{formatEventData(event)}
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			{/if}
+			<!-- Stream Events Overlay - Disabled for clean design -->
 		</div>
 	{/if}
 </div>

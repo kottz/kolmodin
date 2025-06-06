@@ -72,6 +72,7 @@ export function getActiveGame(): string | null {
 // Broadcast state update for the currently active game
 export function broadcastCurrentGameState(): void {
 	if (!currentActiveGame) {
+		console.log('Game Event Router: No active game to broadcast state for');
 		debug('Game Event Router: No active game to broadcast state for');
 		return;
 	}
@@ -80,9 +81,23 @@ export function broadcastCurrentGameState(): void {
 	if (store && store.getPublicState) {
 		if (!store.shouldBroadcastUpdate || store.shouldBroadcastUpdate()) {
 			const publicState = store.getPublicState();
+			console.log(
+				'Game Event Router: About to broadcast state for',
+				currentActiveGame,
+				'phase:',
+				publicState?.phase?.type
+			);
+			console.log('BroadcastService initialized?', broadcastService.isInitialized());
 			broadcastService.broadcastStateUpdate(currentActiveGame, publicState);
 			debug(`Game Event Router: Broadcasted state update for ${currentActiveGame}`);
+		} else {
+			console.log('Game Event Router: Store says not to broadcast update');
 		}
+	} else {
+		console.log(
+			'Game Event Router: No store found or no getPublicState method for',
+			currentActiveGame
+		);
 	}
 }
 

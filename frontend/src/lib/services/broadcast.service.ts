@@ -76,10 +76,34 @@ function createBroadcastService() {
 		}
 
 		try {
+			// Test if message is serializable first
+			JSON.parse(JSON.stringify(message));
 			state.channel.postMessage(message);
 			debug('BroadcastService: Sent message:', message);
 		} catch (error) {
-			warn('BroadcastService: Failed to send message:', error);
+			if (error instanceof TypeError && error.message.includes('could not be cloned')) {
+				console.error('BroadcastService: Message contains non-serializable data:', error);
+				console.error('Problematic message:', message);
+				// Try to send a simplified version for STATE_UPDATE messages
+				if (message.type === 'STATE_UPDATE') {
+					const simpleMessage = {
+						type: 'STATE_UPDATE',
+						gameType: (message as any).gameType,
+						state: {
+							phase: { type: (message as any).state?.phase?.type || 'Unknown' }
+						},
+						timestamp: Date.now()
+					};
+					try {
+						state.channel.postMessage(simpleMessage);
+						console.log('BroadcastService: Sent simplified message instead');
+					} catch (fallbackError) {
+						warn('BroadcastService: Even simplified message failed:', fallbackError);
+					}
+				}
+			} else {
+				warn('BroadcastService: Failed to send message:', error);
+			}
 		}
 	}
 
@@ -97,6 +121,12 @@ function createBroadcastService() {
 	}
 
 	function broadcastStateUpdate(gameType: string, publicState: any): void {
+		console.log(
+			'BroadcastService: Broadcasting state update for',
+			gameType,
+			'with phase:',
+			publicState?.phase?.type
+		);
 		sendMessage({
 			type: 'STATE_UPDATE',
 			gameType,
