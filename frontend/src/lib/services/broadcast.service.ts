@@ -1,7 +1,7 @@
 // src/lib/services/broadcast.service.ts
 
 import { debug, info, warn } from '$lib/utils/logger';
-import type { BroadcastMessage, StreamEvent } from '$lib/types/stream.types';
+import type { BroadcastMessage, StreamEvent, StateUpdateMessage } from '$lib/types/stream.types';
 
 const BROADCAST_CHANNEL_NAME = 'kolmodin-stream';
 
@@ -86,11 +86,15 @@ function createBroadcastService() {
 				console.error('Problematic message:', message);
 				// Try to send a simplified version for STATE_UPDATE messages
 				if (message.type === 'STATE_UPDATE') {
+					const stateMessage = message as StateUpdateMessage;
 					const simpleMessage = {
 						type: 'STATE_UPDATE',
-						gameType: (message as any).gameType,
+						gameType: stateMessage.gameType,
 						state: {
-							phase: { type: (message as any).state?.phase?.type || 'Unknown' }
+							phase: {
+								type:
+									(stateMessage.state as { phase?: { type?: string } })?.phase?.type || 'Unknown'
+							}
 						},
 						timestamp: Date.now()
 					};
@@ -120,12 +124,12 @@ function createBroadcastService() {
 		debug(`BroadcastService: Unregistered handler for message type: ${messageType}`);
 	}
 
-	function broadcastStateUpdate(gameType: string, publicState: any): void {
+	function broadcastStateUpdate(gameType: string, publicState: unknown): void {
 		console.log(
 			'BroadcastService: Broadcasting state update for',
 			gameType,
 			'with phase:',
-			publicState?.phase?.type
+			(publicState as { phase?: { type?: string } })?.phase?.type
 		);
 		sendMessage({
 			type: 'STATE_UPDATE',
