@@ -15,7 +15,7 @@
 </svelte:head>
 
 <!-- If using mode-watcher for dark/light mode -->
-<ModeWatcher defaultMode={'dark'} />
+<ModeWatcher defaultMode="dark" />
 
 <NotificationList />
 <WebsocketDisconnectOverlay />

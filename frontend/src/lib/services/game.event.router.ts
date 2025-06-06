@@ -8,7 +8,7 @@ import { warn, debug, info } from '$lib/utils/logger';
 // Define an interface for what a game-specific store's event processor should look like.
 // Enhanced to include streaming capabilities
 interface GameStoreEventProcessor extends Partial<StreamableGameStore> {
-	processEvent: (eventData: any) => void; // `eventData` will be specific to the game
+	processEvent: (eventData: unknown) => void; // `eventData` will be specific to the game
 }
 
 // This registry will map game_type_id to their respective store's event processor.

@@ -15,5 +15,5 @@ export interface LobbyDetails {
 export interface ApiErrorResponse {
 	error: string; // A general error category or code
 	message: string; // User-friendly message
-	details?: any; // Optional additional details
+	details?: unknown; // Optional additional details
 }

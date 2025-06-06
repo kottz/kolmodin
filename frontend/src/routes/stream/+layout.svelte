@@ -15,7 +15,7 @@
 </svelte:head>
 
 <!-- Force dark mode for stream window for better stream appearance -->
-<ModeWatcher defaultMode={'dark'} disableTransitions />
+<ModeWatcher defaultMode="dark" disableTransitions />
 
 <main class="bg-background text-foreground">
 	{@render children()}

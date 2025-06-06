@@ -19,7 +19,7 @@ const LOG_LEVELS = {
 };
 
 function createLogger(type: 'log' | 'info' | 'warn' | 'error' | 'debug') {
-	return (...args: any[]) => {
+	return (...args: unknown[]) => {
 		if (!config.enabled || LOG_LEVELS[type] < LOG_LEVELS[config.level]) {
 			return;
 		}
