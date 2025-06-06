@@ -10,7 +10,7 @@
 	} from '$lib/components/ui/card';
 	import { uiStore } from '$lib/stores/ui.store.svelte';
 	import { lobbyStore } from '$lib/stores/lobby.store.svelte';
-	import { websocketStore, ConnectionStatus } from '$lib/stores/websocket.store.svelte'; // Import ConnectionStatus
+	import { websocketStore } from '$lib/stores/websocket.store.svelte';
 	import { notificationStore } from '$lib/stores/notification.store.svelte';
 	import { lobbyService } from '$lib/services/lobby.service';
 	import type { AvailableGame, LobbyDetails } from '$lib/types/general.types';

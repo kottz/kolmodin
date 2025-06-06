@@ -251,7 +251,7 @@
 							</div>
 						{:else}
 							<div class="space-y-2">
-								{#each leaderboard() as { player, points }, index}
+								{#each leaderboard() as { player, points }, index (player)}
 									<div class="bg-muted/50 flex items-center justify-between rounded-lg border p-3">
 										<div class="flex items-center gap-3">
 											<div

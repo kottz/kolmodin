@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { streamStore } from '$lib/stores/stream.store.svelte';
-	import { info, debug } from '$lib/utils/logger';
+	import { info } from '$lib/utils/logger';
 	import type { StreamEvent } from '$lib/types/stream.types';
 
 	// Stream-specific game view components
@@ -45,13 +45,6 @@
 		info('StreamWindow: Destroying, cleaning up stream store');
 		streamStore.cleanup();
 	});
-
-	function formatEventData(event: StreamEvent): string {
-		if (typeof event.data === 'object') {
-			return JSON.stringify(event.data, null, 2);
-		}
-		return String(event.data);
-	}
 </script>
 
 <svelte:head>

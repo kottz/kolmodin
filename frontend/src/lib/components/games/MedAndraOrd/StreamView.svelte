@@ -1,13 +1,11 @@
 <script lang="ts">
-	import { fade, fly, scale } from 'svelte/transition';
+	import { fly, scale } from 'svelte/transition';
 	import { elasticOut } from 'svelte/easing';
 	import { onDestroy } from 'svelte';
 	import type { MedAndraOrdPublicState } from './types';
-	import type { StreamDisplayConfig } from '$lib/types/stream.types';
 
 	interface Props {
 		gameState: MedAndraOrdPublicState;
-		displayConfig: StreamDisplayConfig;
 	}
 
 	let { gameState }: Props = $props();
@@ -265,7 +263,6 @@
 
 	// Derived states
 	const isPlaying = $derived(gameState.phase.type === 'Playing');
-	const hasPlayers = $derived(gameState.leaderboard.length > 0);
 	const isLowTime = $derived(streamTimer <= 30 && streamTimer > 0);
 	const showTimer = $derived(gameState.timeLimitEnabled && isPlaying);
 	const showPointLimit = $derived(gameState.pointLimitEnabled && gameState.targetPoints > 0);

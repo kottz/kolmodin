@@ -30,7 +30,7 @@ export interface MedAndraOrdGameState {
 
 // Public state interface for streaming (safe to broadcast)
 export interface MedAndraOrdPublicState extends BasePublicGameState {
-	phase: { type: string; data?: any };
+	phase: { type: string; data?: unknown };
 	targetPoints: number;
 	gameDurationSeconds: number;
 	pointLimitEnabled: boolean;

@@ -1,7 +1,7 @@
 // src/lib/stores/stream.store.svelte.ts
 
 import { broadcastService } from '$lib/services/broadcast.service';
-import { debug, info, warn } from '$lib/utils/logger';
+import { debug, info } from '$lib/utils/logger';
 import type {
 	BroadcastMessage,
 	StreamEvent,
@@ -33,7 +33,7 @@ function createStreamStore() {
 
 	const displayConfig = $state<StreamDisplayConfig>({ ...DEFAULT_DISPLAY_CONFIG });
 
-	let eventCleanupTimeouts = new Map<string, number>();
+	const eventCleanupTimeouts = new Map<string, number>();
 
 	// Initialize the broadcast service for stream window
 	function initialize(): void {

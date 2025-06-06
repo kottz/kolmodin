@@ -4,17 +4,8 @@ import { registerGameStore, broadcastCurrentGameState } from '$lib/services/game
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
 import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
 import type { MedAndraOrdGameState, GameEventData, MedAndraOrdCommandData } from './types';
-import type {
-	StreamableGameStore,
-	StreamEvent,
-	BasePublicGameState
-} from '$lib/types/stream.types';
-import {
-	StreamEventManager,
-	createStreamEvent,
-	createPublicStateFilter,
-	createPublicLeaderboard
-} from '$lib/utils/stream.utils';
+import type { StreamEvent, BasePublicGameState } from '$lib/types/stream.types';
+import { StreamEventManager, createPublicLeaderboard } from '$lib/utils/stream.utils';
 import { debug, warn, info } from '$lib/utils/logger';
 
 const GAME_TYPE_ID = 'MedAndraOrd'; // Must match Rust GAME_TYPE_ID
@@ -31,7 +22,7 @@ interface MedAndraOrdStoreActions {
 
 // Define public state structure for streaming
 interface MedAndraOrdPublicState extends BasePublicGameState {
-	phase: { type: string; data?: any };
+	phase: { type: string; data?: unknown };
 	targetPoints: number;
 	gameDurationSeconds: number;
 	pointLimitEnabled: boolean;
@@ -311,7 +302,9 @@ function createMedAndraOrdStore() {
 				break;
 
 			default:
-				warn(`MedAndraOrdStore: Unhandled event type: ${(eventPayload as any).event_type}`);
+				warn(
+					`MedAndraOrdStore: Unhandled event type: ${(eventPayload as { event_type: string }).event_type}`
+				);
 		}
 	}
 
