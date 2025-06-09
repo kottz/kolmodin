@@ -6,23 +6,41 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     expires_in: u64,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &"***REDACTED***")
+            .field("expires_in", &self.expires_in)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct AppAccessToken {
     pub token: String,
     pub expires_at: Instant,
+}
+
+impl std::fmt::Debug for AppAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppAccessToken")
+            .field("token", &"***REDACTED***")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 pub async fn fetch_twitch_app_access_token(
     client_id: &str,
     client_secret: &str,
 ) -> Result<AppAccessToken, TwitchError> {
-    tracing::info!("[TWITCH_API] Fetching App Access Token...");
+    tracing::info!("Fetching App Access Token");
     let url = "https://id.twitch.tv/oauth2/token";
     let params = [
         ("client_id", client_id),
@@ -49,16 +67,16 @@ pub async fn fetch_twitch_app_access_token(
         let effective_expires_in = token_data.expires_in.saturating_sub(10);
         if effective_expires_in == 0 {
             tracing::warn!(
-                "[TWITCH_API] Token expires_in is very short (<=10s): {}. Using as is.",
-                token_data.expires_in
+                token.expires_in = token_data.expires_in,
+                "Token expires_in is very short (<=10s). Using as is"
             );
         }
 
         let expires_at = Instant::now() + Duration::from_secs(effective_expires_in);
         tracing::info!(
-            "[TWITCH_API] App Access Token fetched successfully. Original expires_in: {}s. Effective expires_at: {:?}.",
-            token_data.expires_in,
-            expires_at
+            token.expires_in = token_data.expires_in,
+            token.expires_at = ?expires_at,
+            "App Access Token fetched successfully"
         );
         Ok(AppAccessToken {
             token: token_data.access_token,
@@ -71,9 +89,9 @@ pub async fn fetch_twitch_app_access_token(
             .await
             .unwrap_or_else(|_| "Unknown error body".to_string());
         tracing::error!(
-            "[TWITCH_API] Failed to get App Access Token (HTTP {}): {}",
-            status,
-            error_body
+            http.status = %status,
+            error.body = %error_body,
+            "Failed to get App Access Token"
         );
         Err(TwitchError::TwitchAuth(format!(
             "Token fetch failed (HTTP {}): {}",
@@ -120,7 +138,7 @@ impl TokenProvider {
 
     // Internal method to fetch a new token
     async fn fetch_new_token_and_update(&self) -> Result<(), TwitchError> {
-        tracing::info!("[TOKEN_PROVIDER] Attempting to fetch new app access token.");
+        tracing::info!("Attempting to fetch new app access token");
         match fetch_twitch_app_access_token(
             &self.twitch_config.client_id,
             &self.twitch_config.client_secret,
@@ -130,13 +148,13 @@ impl TokenProvider {
             Ok(new_token_info) => {
                 let mut token_wlock = self.current_token.write().await;
                 *token_wlock = new_token_info;
-                tracing::info!("[TOKEN_PROVIDER] App access token fetched/updated successfully.");
+                tracing::info!("App access token fetched/updated successfully");
                 Ok(())
             }
             Err(e) => {
                 tracing::error!(
-                    "[TOKEN_PROVIDER] Failed to fetch new app access token: {:?}.",
-                    e
+                    error = ?e,
+                    "Failed to fetch new app access token"
                 );
                 Err(e)
             }
@@ -158,19 +176,19 @@ impl TokenProvider {
                 };
 
                 tracing::debug!(
-                    "[TOKEN_PROVIDER] Token expires at: {:?}. Time to expiry: {:?}. Calculated sleep until grace: {:?}.",
-                    expires_at,
-                    time_to_expiry,
-                    sleep_duration_until_grace
+                    token.expires_at = ?expires_at,
+                    time.to_expiry = ?time_to_expiry,
+                    sleep.duration = ?sleep_duration_until_grace,
+                    "Token refresh timing calculated"
                 );
 
                 // Wait until it's time to refresh OR an immediate refresh is signaled
                 tokio::select! {
                     _ = sleep(sleep_duration_until_grace) => {
-                        tracing::info!("[TOKEN_PROVIDER] Scheduled refresh period reached or token is near expiry.");
+                        tracing::info!("Scheduled refresh period reached or token is near expiry");
                     }
                     _ = self_clone.force_refresh_trigger.notified() => {
-                        tracing::info!("[TOKEN_PROVIDER] Immediate refresh signaled.");
+                        tracing::info!("Immediate refresh signaled");
                     }
                 }
 
@@ -184,8 +202,8 @@ impl TokenProvider {
                         Err(_) => {
                             if fetch_attempts >= 3 {
                                 tracing::error!(
-                                    "[TOKEN_PROVIDER] Failed to fetch new token after {} attempts. Will retry later based on expiry.",
-                                    fetch_attempts
+                                    attempts = fetch_attempts,
+                                    "Failed to fetch new token after max attempts. Will retry later based on expiry"
                                 );
                                 // After max attempts, don't immediately retry.
                                 // The outer loop will re-evaluate based on current token's (possibly old) expiry.
@@ -194,8 +212,8 @@ impl TokenProvider {
                                 break;
                             }
                             tracing::warn!(
-                                "[TOKEN_PROVIDER] Token fetch attempt {} failed. Retrying in 30s.",
-                                fetch_attempts
+                                attempt = fetch_attempts,
+                                "Token fetch attempt failed. Retrying in 30s"
                             );
                             sleep(Duration::from_secs(30)).await;
                         }

@@ -27,7 +27,9 @@ impl FileDataSource {
 
 #[async_trait::async_trait]
 impl DataSource for FileDataSource {
+    #[tracing::instrument(skip(self), fields(file.path = %self.file_path))]
     async fn load(&self) -> Result<String, DbError> {
+        tracing::debug!("Loading data from file");
         tokio::fs::read_to_string(&self.file_path)
             .await
             .map_err(|e| DbError::FileRead {
@@ -49,7 +51,9 @@ impl HttpDataSource {
 
 #[async_trait::async_trait]
 impl DataSource for HttpDataSource {
+    #[tracing::instrument(skip(self), fields(http.url = %self.url))]
     async fn load(&self) -> Result<String, DbError> {
+        tracing::debug!("Fetching data from URL");
         let response = reqwest::get(&self.url)
             .await
             .map_err(|e| DbError::HttpFetch {
@@ -67,7 +71,9 @@ impl DataSource for HttpDataSource {
 pub struct DataFileParser;
 
 impl DataFileParser {
+    #[tracing::instrument(skip(content), fields(content.length = content.len()))]
     pub fn parse_structured_data(content: &str) -> Result<GameData, DbError> {
+        tracing::debug!("Parsing structured data");
         let mut sections = HashMap::new();
         let mut current_section: Option<String> = None;
         let mut current_items = Vec::new();
@@ -82,6 +88,11 @@ impl DataFileParser {
             if let Some(section_name) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
             {
                 if let Some(prev_section) = current_section.take() {
+                    tracing::debug!(
+                        section.name = %prev_section,
+                        section.items.count = current_items.len(),
+                        "Parsed section"
+                    );
                     sections.insert(prev_section, current_items.clone());
                     current_items.clear();
                 }
@@ -92,6 +103,11 @@ impl DataFileParser {
         }
 
         if let Some(section_name) = current_section {
+            tracing::debug!(
+                section.name = %section_name,
+                section.items.count = current_items.len(),
+                "Parsed section"
+            );
             sections.insert(section_name, current_items);
         }
 
@@ -145,14 +161,15 @@ impl DataManager {
         Ok(Self { data_source })
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn load_game_data(&self) -> Result<GameData, DbError> {
         let content = self.data_source.load().await?;
         let game_data = DataFileParser::parse_structured_data(&content)?;
 
         tracing::info!(
-            "Loaded structured data: {} twitch channels, {} words",
-            game_data.twitch_whitelist.len(),
-            game_data.medandraord_words.len()
+            twitch.channels.count = game_data.twitch_whitelist.len(),
+            words.count = game_data.medandraord_words.len(),
+            "Loaded structured data"
         );
 
         Ok(game_data)
@@ -166,17 +183,22 @@ pub struct WordListManager {
 }
 
 impl WordListManager {
+    #[tracing::instrument(skip(config), fields(
+        data.source_type = ?config.source_type,
+        data.file_path = ?config.file_path,
+        data.http_url = ?config.http_url
+    ))]
     pub async fn new(config: DatabaseConfig) -> AppResult<Self> {
         let data_manager = DataManager::new(&config)?;
         let initial_data = data_manager.load_game_data().await.map_err(|err| {
-            tracing::error!("Failed to load required data file: {}", err);
+            tracing::error!(error = %err, "Failed to load required data file");
             err
         })?;
 
         tracing::info!(
-            "Successfully loaded data: {} twitch channels, {} words",
-            initial_data.twitch_whitelist.len(),
-            initial_data.medandraord_words.len()
+            twitch.channels.count = initial_data.twitch_whitelist.len(),
+            words.count = initial_data.medandraord_words.len(),
+            "WordListManager initialized successfully"
         );
 
         Ok(Self {
@@ -186,21 +208,26 @@ impl WordListManager {
         })
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn refresh_data(&self) -> AppResult<()> {
+        tracing::info!("Refreshing game data");
         let new_data = self.data_manager.load_game_data().await?;
 
         {
             let mut words_guard = self.medandraord_words.write().await;
             *words_guard = Arc::new(new_data.medandraord_words);
-            tracing::info!("Refreshed medandraord words. Count: {}", words_guard.len());
+            tracing::info!(
+                words.count = words_guard.len(),
+                "Refreshed medandraord words"
+            );
         }
 
         {
             let mut whitelist_guard = self.twitch_whitelist.write().await;
             *whitelist_guard = Arc::new(new_data.twitch_whitelist);
             tracing::info!(
-                "Refreshed twitch whitelist. Count: {}",
-                whitelist_guard.len()
+                twitch.channels.count = whitelist_guard.len(),
+                "Refreshed twitch whitelist"
             );
         }
 
@@ -219,14 +246,22 @@ impl WordListManager {
         self.twitch_whitelist.read().await.clone()
     }
 
+    #[tracing::instrument(skip(self), fields(channel.name = %channel_name))]
     pub async fn is_twitch_channel_allowed(&self, channel_name: &str) -> bool {
         let whitelist = self.twitch_whitelist.read().await;
-        if whitelist.is_empty() {
-            return true;
-        }
-
+        let is_empty = whitelist.is_empty();
         let normalized_channel = channel_name.to_lowercase();
-        whitelist.contains(&normalized_channel)
+        let is_allowed = is_empty || whitelist.contains(&normalized_channel);
+
+        tracing::trace!(
+            channel.normalized = %normalized_channel,
+            whitelist.empty = is_empty,
+            whitelist.count = whitelist.len(),
+            result = is_allowed,
+            "Checking if Twitch channel is allowed"
+        );
+
+        is_allowed
     }
 }
 

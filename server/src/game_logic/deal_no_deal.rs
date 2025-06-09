@@ -187,9 +187,9 @@ impl DealNoDealGame {
                     .await
             }
             Err(e) => tracing::error!(
-                "DND: Serialize GameEvent err for client {}: {}",
-                client_id,
-                e
+                client.id = %client_id,
+                error = %e,
+                "Failed to serialize GameEvent for client"
             ),
         }
     }
@@ -210,7 +210,10 @@ impl DealNoDealGame {
                 self.broadcast_generic_message_to_all_admins_internal(wrapped)
                     .await
             }
-            Err(e) => tracing::error!("DND: Serialize GameEvent err for broadcast: {}", e),
+            Err(e) => tracing::error!(
+                error = %e,
+                "Failed to serialize GameEvent for broadcast"
+            ),
         }
     }
 
@@ -229,10 +232,16 @@ impl DealNoDealGame {
         if let Some(tx) = self.clients.get(client_id) {
             if let Ok(ws_msg) = message.to_ws_text() {
                 if tx.send(ws_msg).await.is_err() {
-                    tracing::warn!("DND: Fail send generic to client {}", client_id);
+                    tracing::warn!(
+                        client.id = %client_id,
+                        "Failed to send generic message to client"
+                    );
                 }
             } else {
-                tracing::error!("DND: Serialize generic err for client {}", client_id);
+                tracing::error!(
+                    client.id = %client_id,
+                    "Failed to serialize generic message for client"
+                );
             }
         }
     }
@@ -247,11 +256,14 @@ impl DealNoDealGame {
         if let Ok(ws_msg) = message.to_ws_text() {
             for (id, tx) in &self.clients {
                 if tx.send(ws_msg.clone()).await.is_err() {
-                    tracing::warn!("DND: Fail broadcast generic to admin {}", id);
+                    tracing::warn!(
+                        client.id = %id,
+                        "Failed to broadcast generic message to admin"
+                    );
                 }
             }
         } else {
-            tracing::error!("DND: Serialize generic err for broadcast");
+            tracing::error!("Failed to serialize generic message for broadcast");
         }
     }
 
@@ -267,7 +279,10 @@ impl DealNoDealGame {
 
         self.phase = GamePhase::PlayerCaseSelectionVoting;
         self.current_votes_by_user.clear();
-        tracing::info!("DND: Game board initialized. Phase: PlayerCaseSelectionVoting.");
+        tracing::info!(
+            phase = "PlayerCaseSelectionVoting",
+            "Game board initialized"
+        );
     }
 
     fn open_briefcase(&mut self, case_index: usize) -> Option<u64> {
@@ -385,7 +400,10 @@ impl DealNoDealGame {
         if matches!(self.phase, GamePhase::Setup | GamePhase::GameOver { .. }) {
             self.initialize_game_board();
         } else {
-            tracing::warn!("DND: StartGame called in invalid phase: {:?}", self.phase);
+            tracing::warn!(
+                phase = ?self.phase,
+                "StartGame called in invalid phase"
+            );
         }
     }
 
@@ -425,7 +443,7 @@ impl DealNoDealGame {
                 } else {
                     self.current_votes_by_user.clear();
                     tracing::warn!(
-                        "DND: No valid player case selected. Awaiting more votes or re-concluding."
+                        "No valid player case selected. Awaiting more votes or re-concluding"
                     );
                 }
             }
@@ -474,10 +492,10 @@ impl DealNoDealGame {
                     };
                     self.current_votes_by_user.clear();
                     tracing::warn!(
-                        "DND: Not enough cases opened for round {}. Target: {}, Opened: {}. Awaiting more votes.",
-                        round_number,
-                        total_to_open_for_round,
-                        opened_so_far_for_round
+                        round.number = round_number,
+                        cases.target = total_to_open_for_round,
+                        cases.opened = opened_so_far_for_round,
+                        "Not enough cases opened for round. Awaiting more votes"
                     );
                 }
             }
@@ -493,15 +511,22 @@ impl DealNoDealGame {
                     Some(idx) => idx,
                     None => {
                         tracing::error!(
-                            "[GAME][DND] Player case index missing during DealOrNoDeal - defaulting to case 0"
+                            "Player case index missing during DealOrNoDeal - defaulting to case 0"
                         );
                         0
                     }
                 };
-                let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
-                    tracing::error!("[GAME][DND] Invalid case index {} during DealOrNoDeal - using default value", p_case_idx);
-                    1000000
-                });
+                let p_case_val = self
+                    .briefcase_values
+                    .get(p_case_idx)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        tracing::error!(
+                            case.index = p_case_idx,
+                            "Invalid case index during DealOrNoDeal - using default value"
+                        );
+                        1000000
+                    });
 
                 if took_deal {
                     let summary = format!(
@@ -541,10 +566,16 @@ impl DealNoDealGame {
                         return;
                     } else {
                         let next_display_r_num = round_number + 1;
-                        let cases_to_open_next_round = ROUND_SCHEDULE.get(self.current_round_schedule_index).copied().unwrap_or_else(|| {
-                            tracing::error!("[GAME][DND] Invalid round schedule index {} - using default value", self.current_round_schedule_index);
-                            1
-                        });
+                        let cases_to_open_next_round = ROUND_SCHEDULE
+                            .get(self.current_round_schedule_index)
+                            .copied()
+                            .unwrap_or_else(|| {
+                                tracing::error!(
+                                    schedule.index = self.current_round_schedule_index,
+                                    "Invalid round schedule index - using default value"
+                                );
+                                1
+                            });
                         let actual_open_for_next_round = std::cmp::min(
                             cases_to_open_next_round,
                             unopened_not_player.len() as u8,
@@ -573,19 +604,33 @@ impl DealNoDealGame {
                     Some(idx) => idx,
                     None => {
                         tracing::error!(
-                            "[GAME][DND] Player case index missing during SwitchOrKeep - defaulting to case 0"
+                            "Player case index missing during SwitchOrKeep - defaulting to case 0"
                         );
                         0
                     }
                 };
-                let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
-                    tracing::error!("[GAME][DND] Invalid case index {} during SwitchOrKeep - using default value", p_case_idx);
-                    1000000
-                });
-                let final_case_val = self.briefcase_values.get(final_case_index).copied().unwrap_or_else(|| {
-                    tracing::error!("[GAME][DND] Invalid final case index {} during SwitchOrKeep - using default value", final_case_index);
-                    1000000
-                });
+                let p_case_val = self
+                    .briefcase_values
+                    .get(p_case_idx)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        tracing::error!(
+                            case.index = p_case_idx,
+                            "Invalid case index during SwitchOrKeep - using default value"
+                        );
+                        1000000
+                    });
+                let final_case_val = self
+                    .briefcase_values
+                    .get(final_case_index)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        tracing::error!(
+                            final_case.index = final_case_index,
+                            "Invalid final case index during SwitchOrKeep - using default value"
+                        );
+                        1000000
+                    });
 
                 if final_case_index < self.briefcase_is_opened.len()
                     && !self.briefcase_is_opened[final_case_index]
@@ -641,8 +686,8 @@ impl DealNoDealGame {
             }
             _ => {
                 tracing::warn!(
-                    "DND: ConcludeVotingAndProcess called in invalid phase: {:?}",
-                    self.phase
+                    phase = ?self.phase,
+                    "ConcludeVotingAndProcess called in invalid phase"
                 );
             }
         }
@@ -653,16 +698,23 @@ impl DealNoDealGame {
             Some(idx) => idx,
             None => {
                 tracing::error!(
-                    "[GAME][DND] Player case index missing at end_game_no_deal_final_case - defaulting to case 0"
+                    "Player case index missing at end_game_no_deal_final_case - defaulting to case 0"
                 );
                 0
             }
         };
 
-        let p_case_val = self.briefcase_values.get(p_case_idx).copied().unwrap_or_else(|| {
-            tracing::error!("[GAME][DND] Invalid case index {} at end_game_no_deal_final_case - using default value", p_case_idx);
-            1000000
-        });
+        let p_case_val = self
+            .briefcase_values
+            .get(p_case_idx)
+            .copied()
+            .unwrap_or_else(|| {
+                tracing::error!(
+                    case.index = p_case_idx,
+                    "Invalid case index at end_game_no_deal_final_case - using default value"
+                );
+                1000000
+            });
 
         if p_case_idx < self.briefcase_is_opened.len() && !self.briefcase_is_opened[p_case_idx] {
             self.open_briefcase(p_case_idx);
@@ -747,8 +799,8 @@ impl GameLogic for DealNoDealGame {
                 .await;
         } else {
             tracing::error!(
-                "DND: Failed to serialize FullStateUpdate for new client {}",
-                client_id
+                client.id = %client_id,
+                "Failed to serialize FullStateUpdate for new client"
             );
         }
     }
@@ -765,8 +817,8 @@ impl GameLogic for DealNoDealGame {
             } => {
                 if game_type_id != self.game_type_id() {
                     tracing::warn!(
-                        "DND: Received command for wrong game_type_id: {}",
-                        game_type_id
+                        game.type_id = %game_type_id,
+                        "Received command for wrong game_type_id"
                     );
                     return;
                 }
@@ -781,16 +833,19 @@ impl GameLogic for DealNoDealGame {
                         self.broadcast_full_state_update_internal().await;
                     }
                     Err(e) => {
-                        tracing::error!("DND: Deserialize AdminCommand err: {}", e);
+                        tracing::error!(
+                            error = %e,
+                            "Failed to deserialize AdminCommand"
+                        );
                         self.broadcast_full_state_update_internal().await;
                     }
                 }
             }
             GenericClientToServerMessage::GlobalCommand { .. } => {
-                tracing::trace!("DND: Received GlobalCommand (unhandled by DND specific logic)");
+                tracing::trace!("Received GlobalCommand (unhandled by DND specific logic)");
             }
             _ => {
-                tracing::warn!("DND: Received unrecognized message type");
+                tracing::warn!("Received unrecognized message type");
             }
         }
     }

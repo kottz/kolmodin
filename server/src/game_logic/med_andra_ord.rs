@@ -94,7 +94,7 @@ impl MedAndraOrdGameState {
             point_limit_enabled: true,
             time_limit_enabled: false,
             player_scores: HashMap::new(),
-            current_word_list: word_list_snapshot, // Store it
+            current_word_list: word_list_snapshot,
             local_used_words: HashSet::new(),
             game_start_time: None,
         }
@@ -111,9 +111,9 @@ impl MedAndraOrdGameState {
             }
             Err(e) => {
                 tracing::error!(
-                    "MedAndraOrd: Failed to serialize GameEvent for client {}: {}",
-                    client_id,
-                    e
+                    client.id = %client_id,
+                    error = %e,
+                    "Failed to serialize GameEvent for client"
                 );
             }
         }
@@ -129,8 +129,8 @@ impl MedAndraOrdGameState {
             }
             Err(e) => {
                 tracing::error!(
-                    "MedAndraOrd: Failed to serialize GameEvent for broadcast: {}",
-                    e
+                    error = %e,
+                    "Failed to serialize GameEvent for broadcast"
                 );
             }
         }
@@ -150,7 +150,10 @@ impl MedAndraOrdGameState {
         if let Some(tx) = self.clients.get(client_id) {
             if let Ok(ws_msg) = message.to_ws_text() {
                 if tx.send(ws_msg).await.is_err() {
-                    tracing::warn!("MedAndraOrd: Failed to send to client {}", client_id);
+                    tracing::warn!(
+                        client.id = %client_id,
+                        "Failed to send to client"
+                    );
                 }
             }
         }
@@ -163,7 +166,10 @@ impl MedAndraOrdGameState {
         if let Ok(ws_msg) = message.to_ws_text() {
             for (id, tx) in &self.clients {
                 if tx.send(ws_msg.clone()).await.is_err() {
-                    tracing::warn!("MedAndraOrd: Failed to broadcast to client {}", id);
+                    tracing::warn!(
+                        client.id = %id,
+                        "Failed to broadcast to client"
+                    );
                 }
             }
         }
@@ -215,7 +221,7 @@ impl MedAndraOrdGameState {
         })
         .await;
 
-        tracing::info!("MedAndraOrd: Game ended due to time expiration");
+        tracing::info!("Game ended due to time expiration");
     }
 
     async fn handle_start_game(&mut self) {
@@ -253,7 +259,7 @@ impl MedAndraOrdGameState {
                 new_phase: self.phase.clone(),
             })
             .await;
-            tracing::warn!("MedAndraOrd: No words available to start game.");
+            tracing::warn!("No words available to start game");
         }
     }
 
@@ -282,7 +288,7 @@ impl MedAndraOrdGameState {
                     is_placeholder: true,
                 })
                 .await;
-                tracing::warn!("MedAndraOrd: Ran out of words during PassWord.");
+                tracing::warn!("Ran out of words during PassWord");
             }
         }
     }
@@ -325,7 +331,7 @@ impl MedAndraOrdGameState {
 
     fn get_next_word(&mut self) -> Option<String> {
         if self.current_word_list.is_empty() {
-            tracing::warn!("MedAndraOrd: Word list is empty, cannot get next word.");
+            tracing::warn!("Word list is empty, cannot get next word");
             return None;
         }
 
@@ -337,7 +343,7 @@ impl MedAndraOrdGameState {
             .collect();
 
         if available_words.is_empty() {
-            tracing::info!("MedAndraOrd: All words used, resetting used words list for this game.");
+            tracing::info!("All words used, resetting used words list for this game");
             self.local_used_words.clear();
             // Try again with reset list
             self.current_word_list.choose(&mut thread_rng()).cloned()
@@ -392,7 +398,7 @@ impl MedAndraOrdGameState {
                 is_placeholder: true,
             })
             .await;
-            tracing::warn!("MedAndraOrd: Ran out of words after correct guess.");
+            tracing::warn!("Ran out of words after correct guess");
         }
     }
 
@@ -406,7 +412,10 @@ impl MedAndraOrdGameState {
 
 impl GameLogic for MedAndraOrdGameState {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
-        tracing::info!("MedAndraOrd: Client {} connected.", client_id);
+        tracing::debug!(
+            client.id = %client_id,
+            "Client connected"
+        );
         self.clients.insert(client_id, client_tx);
         let state_clone = self.clone();
         self.send_game_event_to_client(&client_id, GameEvent::FullStateUpdate(state_clone))
@@ -414,7 +423,10 @@ impl GameLogic for MedAndraOrdGameState {
     }
 
     async fn client_disconnected(&mut self, client_id: Uuid) {
-        tracing::info!("MedAndraOrd: Client {} disconnected.", client_id);
+        tracing::debug!(
+            client.id = %client_id,
+            "Client disconnected"
+        );
         self.clients.remove(&client_id);
     }
 
@@ -425,7 +437,10 @@ impl GameLogic for MedAndraOrdGameState {
                 command_data,
             } => {
                 if game_type_id != self.game_type_id() {
-                    tracing::warn!("MedAndraOrd: Wrong game_type_id: {}", game_type_id);
+                    tracing::warn!(
+                        game.type_id = %game_type_id,
+                        "Wrong game_type_id"
+                    );
                     return;
                 }
 
@@ -451,15 +466,18 @@ impl GameLogic for MedAndraOrdGameState {
                         self.broadcast_full_state_update().await;
                     }
                     Err(e) => {
-                        tracing::error!("MedAndraOrd: Failed to deserialize command: {}", e);
+                        tracing::error!(
+                            error = %e,
+                            "Failed to deserialize command"
+                        );
                     }
                 }
             }
             GenericClientToServerMessage::GlobalCommand { .. } => {
-                tracing::trace!("MedAndraOrd: Received GlobalCommand (unhandled)");
+                tracing::trace!("Received GlobalCommand (unhandled)");
             }
             _ => {
-                tracing::warn!("MedAndraOrd: Unrecognized message type");
+                tracing::warn!("Unrecognized message type");
             }
         }
     }
@@ -480,10 +498,10 @@ impl GameLogic for MedAndraOrdGameState {
             let target_word = current_word.to_lowercase();
 
             if guess == target_word {
-                tracing::info!(
-                    "MedAndraOrd: Correct guess '{}' from {}",
-                    guess,
-                    message.sender_username
+                tracing::debug!(
+                    guess = %guess,
+                    player = %message.sender_username,
+                    "Correct guess"
                 );
                 self.local_used_words.insert(current_word.clone()); // Use local_used_words
                 self.process_correct_guess(&message.sender_username).await;

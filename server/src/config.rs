@@ -4,17 +4,36 @@ use config::{Config, Environment, Value, ValueKind};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct ServerConfig {
     pub port: u16,
     pub cors_origins: Vec<String>,
     pub admin_api_key: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("port", &self.port)
+            .field("cors_origins", &self.cors_origins)
+            .field("admin_api_key", &"***REDACTED***")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize)]
 pub struct TwitchConfig {
     pub client_id: String,
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for TwitchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwitchConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"***REDACTED***")
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -55,6 +74,7 @@ pub struct AppSettings {
     pub database: DatabaseConfig,
 }
 
+#[tracing::instrument]
 pub fn load_settings() -> AppResult<AppSettings> {
     let default_games_enabled_types: Vec<Value> = GameType::all()
         .iter()

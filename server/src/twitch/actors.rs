@@ -150,9 +150,9 @@ impl TwitchChatManagerActor {
             } => {
                 let normalized_channel_name = channel_name.to_lowercase();
                 tracing::info!(
-                    "[TWITCH_MANAGER] Received subscription request for channel '{}' from lobby '{}'",
-                    normalized_channel_name,
-                    lobby_id
+                    channel.name = %normalized_channel_name,
+                    lobby.id = %lobby_id,
+                    "Received subscription request"
                 );
 
                 let mut create_new_actor = true;
@@ -164,15 +164,15 @@ impl TwitchChatManagerActor {
 
                     if matches!(current_status, TwitchChannelConnectionStatus::Terminated) {
                         tracing::info!(
-                            "[TWITCH_MANAGER] Existing TwitchChannelActor for '{}' is Terminated. Removing stale handle and will create a new one.",
-                            normalized_channel_name
+                            channel.name = %normalized_channel_name,
+                            "Removing terminated channel actor, will create new one"
                         );
                         self.active_channels.remove(&normalized_channel_name);
                     } else {
                         tracing::debug!(
-                            "[TWITCH_MANAGER] Found existing and non-Terminated TwitchChannelActor for '{}' (Status: {:?}). Reusing.",
-                            normalized_channel_name,
-                            current_status
+                            channel.name = %normalized_channel_name,
+                            channel.status = ?current_status,
+                            "Reusing existing non-terminated channel actor"
                         );
                         obtained_actor_handle = Some(existing_state.handle.clone());
                         create_new_actor = false;
@@ -181,8 +181,8 @@ impl TwitchChatManagerActor {
 
                 if create_new_actor {
                     tracing::info!(
-                        "[TWITCH_MANAGER] Creating new TwitchChannelActor for '{}'.",
-                        normalized_channel_name
+                        channel.name = %normalized_channel_name,
+                        "Creating new TwitchChannelActor"
                     );
 
                     let (new_handle, join_handle) = TwitchChannelActorHandle::new(
@@ -242,18 +242,18 @@ impl TwitchChatManagerActor {
                     {
                         Ok(_) => {
                             tracing::info!(
-                                "[TWITCH_MANAGER] Successfully added lobby '{}' as subscriber to channel '{}'",
-                                lobby_id,
-                                normalized_channel_name
+                                lobby.id = %lobby_id,
+                                channel.name = %normalized_channel_name,
+                                "Successfully added lobby as subscriber to channel"
                             );
                             let _ = respond_to.send(Ok(final_actor_handle.get_status_receiver()));
                         }
                         Err(e) => {
                             tracing::error!(
-                                "[TWITCH_MANAGER] Failed to add lobby '{}' as subscriber to channel '{}': {:?}",
-                                lobby_id,
-                                normalized_channel_name,
-                                e
+                                lobby.id = %lobby_id,
+                                channel.name = %normalized_channel_name,
+                                error = ?e,
+                                "Failed to add lobby as subscriber to channel"
                             );
                             let _ = respond_to.send(Err(e));
                         }
@@ -264,7 +264,10 @@ impl TwitchChatManagerActor {
                         "Internal error: Failed to obtain or create actor handle for channel '{}'",
                         normalized_channel_name
                     );
-                    tracing::error!("[TWITCH_MANAGER] {}", error_msg);
+                    tracing::error!(
+                        channel.name = %normalized_channel_name,
+                        "Internal error: Failed to obtain or create actor handle for channel"
+                    );
                     let _ = respond_to.send(Err(TwitchError::InternalActorError(error_msg)));
                 }
             }
@@ -275,9 +278,9 @@ impl TwitchChatManagerActor {
             } => {
                 let normalized_channel_name = channel_name.to_lowercase();
                 tracing::info!(
-                    "[TWITCH_MANAGER] Received unsubscribe request for channel '{}' from lobby '{}'",
-                    normalized_channel_name,
-                    lobby_id
+                    channel.name = %normalized_channel_name,
+                    lobby.id = %lobby_id,
+                    "Received unsubscribe request"
                 );
                 if let Some(channel_state) = self.active_channels.get(&normalized_channel_name) {
                     match channel_state.handle.remove_subscriber(lobby_id).await {
@@ -346,11 +349,11 @@ impl TwitchChatManagerActor {
 }
 
 async fn run_twitch_chat_manager_actor(mut actor: TwitchChatManagerActor) {
-    tracing::info!("[TWITCH_MANAGER] Twitch Chat Manager Actor started.");
+    tracing::info!("Twitch Chat Manager Actor started");
     while let Some(msg) = actor.receiver.recv().await {
         actor.handle_message(msg).await;
     }
-    tracing::info!("[TWITCH_MANAGER] Twitch Chat Manager Actor stopped.");
+    tracing::info!("Twitch Chat Manager Actor stopped");
 }
 
 #[derive(Debug)]

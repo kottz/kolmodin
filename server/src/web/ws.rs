@@ -118,7 +118,7 @@ pub async fn handle_socket(socket: WebSocket, app_state: AppState) {
             return;
         }
         None => {
-            tracing::info!("WS: Client disconnected before sending initial message. Closing.");
+            tracing::debug!("WS: Client disconnected before sending initial message. Closing.");
             return;
         }
     }

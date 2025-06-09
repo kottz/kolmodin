@@ -68,6 +68,9 @@ impl LobbyManagerActor {
         }
     }
 
+    #[tracing::instrument(skip(self, msg), fields(
+        msg_type = %std::any::type_name_of_val(&msg)
+    ))]
     async fn handle_message(&mut self, msg: LobbyManagerMessage) {
         match msg {
             LobbyManagerMessage::CreateLobby {
@@ -82,10 +85,10 @@ impl LobbyManagerActor {
                     .unwrap_or_else(|| "medandraord".to_string());
 
                 tracing::info!(
-                    "LobbyManager: Creating lobby {} req_game='{}' req_twitch='{:?}'",
-                    lobby_id,
-                    game_type_str_req,
-                    requested_twitch_channel
+                    lobby.id = %lobby_id,
+                    request.game_type = %game_type_str_req,
+                    request.twitch_channel = ?requested_twitch_channel,
+                    "Received CreateLobby request"
                 );
 
                 // Validate Twitch channel if requested
@@ -95,6 +98,11 @@ impl LobbyManagerActor {
                         .is_twitch_channel_allowed(channel_name)
                         .await
                     {
+                        tracing::warn!(
+                            lobby.id = %lobby_id,
+                            twitch.channel = %channel_name,
+                            "Twitch channel not allowed for lobby creation"
+                        );
                         let _ = respond_to.send(Err(format!(
                             "Twitch channel '{}' is not in the allowed channels list.",
                             channel_name
@@ -115,6 +123,11 @@ impl LobbyManagerActor {
                 match game_type_str_req.to_lowercase().as_str() {
                     "dealnodeal" | "dealornodeal" => {
                         if !self.games_config.enabled_types.contains("dealnodeal") {
+                            tracing::error!(
+                                lobby.id = %lobby_id,
+                                game.type = "dealnodeal",
+                                "Game type not enabled"
+                            );
                             let _ = respond_to
                                 .send(Err("Game type 'dealnodeal' is not enabled.".to_string()));
                             return;
@@ -132,6 +145,11 @@ impl LobbyManagerActor {
                     }
                     "medandraord" | "medandra" | "ord" => {
                         if !self.games_config.enabled_types.contains("medandraord") {
+                            tracing::error!(
+                                lobby.id = %lobby_id,
+                                game.type = "medandraord",
+                                "Game type not enabled"
+                            );
                             let _ = respond_to
                                 .send(Err("Game type 'medandraord' is not enabled.".to_string()));
                             return;
@@ -149,10 +167,18 @@ impl LobbyManagerActor {
                     }
                     unknown => {
                         tracing::warn!(
-                            "LobbyManager: Unknown game type '{}'. Defaulting to MedAndraOrd if enabled.",
-                            unknown
+                            lobby.id = %lobby_id,
+                            game.type.requested = %unknown,
+                            game.type.fallback = "medandraord",
+                            "Unknown game type, defaulting to MedAndraOrd"
                         );
                         if !self.games_config.enabled_types.contains("medandraord") {
+                            tracing::error!(
+                                lobby.id = %lobby_id,
+                                game.type.requested = %unknown,
+                                game.type.fallback = "medandraord",
+                                "Default game type not enabled for unknown request"
+                            );
                             let _ = respond_to.send(Err(format!(
                                 "Default game type 'medandraord' is not enabled for unknown request '{}'.", unknown
                             )));
@@ -172,6 +198,15 @@ impl LobbyManagerActor {
                 };
 
                 self.lobbies.insert(lobby_id, lobby_actor_handle);
+
+                tracing::info!(
+                    lobby.id = %lobby_id,
+                    admin.id = %admin_id,
+                    game.type = %actual_game_type_created,
+                    twitch.channel = ?requested_twitch_channel,
+                    "Created lobby successfully"
+                );
+
                 let _ = respond_to.send(Ok(LobbyDetails {
                     lobby_id,
                     admin_id,
@@ -183,16 +218,23 @@ impl LobbyManagerActor {
                 lobby_id,
                 respond_to,
             } => {
+                tracing::debug!(
+                    lobby.id = %lobby_id,
+                    "Received GetLobbyHandle request"
+                );
                 let handle = self.lobbies.get(&lobby_id).cloned();
                 let _ = respond_to.send(handle);
             }
             LobbyManagerMessage::LobbyActorShutdown { lobby_id } => {
                 if self.lobbies.remove(&lobby_id).is_some() {
-                    tracing::info!("LobbyManager: Removed handle for lobby {}", lobby_id);
+                    tracing::info!(
+                        lobby.id = %lobby_id,
+                        "Cleaning up lobby after actor shutdown"
+                    );
                 } else {
                     tracing::warn!(
-                        "LobbyManager: Received shutdown for unknown lobby {}",
-                        lobby_id
+                        lobby.id = %lobby_id,
+                        "Received shutdown for unknown lobby"
                     );
                 }
             }
@@ -200,12 +242,13 @@ impl LobbyManagerActor {
     }
 }
 
+#[tracing::instrument(skip(actor))]
 pub async fn run_lobby_manager_actor(mut actor: LobbyManagerActor) {
-    tracing::info!("LobbyManager Actor started.");
+    tracing::info!("LobbyManager actor started");
     while let Some(msg) = actor.receiver.recv().await {
         actor.handle_message(msg).await;
     }
-    tracing::info!("LobbyManager Actor stopped.");
+    tracing::info!("LobbyManager actor stopped");
 }
 
 #[derive(Clone, Debug)]
@@ -328,6 +371,12 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
         }
     }
 
+    #[tracing::instrument(skip(self, msg), fields(
+        lobby.id = %self.lobby_id,
+        game.type = %self.game_engine.game_type_id(),
+        twitch.channel = %self.twitch_channel_name.as_deref().unwrap_or("N/A"),
+        msg_type = %std::any::type_name_of_val(&msg)
+    ))]
     async fn handle_message(&mut self, msg: LobbyActorMessage) {
         match msg {
             LobbyActorMessage::ProcessEvent {
@@ -335,21 +384,17 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 event_data,
             } => {
                 tracing::trace!(
-                    "Lobby {} (Game: {}): Raw event from client {}: {}",
-                    self.lobby_id,
-                    self.game_engine.game_type_id(),
-                    client_id,
-                    event_data
+                    client.id = %client_id,
+                    event.raw = %event_data,
+                    "Raw event from client"
                 );
 
                 match game_messages::client_message_from_ws_text(&event_data) {
                     Ok(parsed_message) => {
                         tracing::debug!(
-                            "Lobby {} (Game: {}): Delegating parsed event {:?} from client {}",
-                            self.lobby_id,
-                            self.game_engine.game_type_id(),
-                            parsed_message,
-                            client_id
+                            client.id = %client_id,
+                            event.type = ?parsed_message,
+                            "Processing event from client"
                         );
                         self.game_engine
                             .handle_event(client_id, parsed_message)
@@ -357,12 +402,10 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Lobby {} (Game: {}): Failed to deserialize event from client {}: '{}'. Raw data: '{}'",
-                            self.lobby_id,
-                            self.game_engine.game_type_id(),
-                            client_id,
-                            e,
-                            event_data
+                            client.id = %client_id,
+                            error = %e,
+                            event.raw = %event_data,
+                            "Failed to deserialize event from client"
                         );
                         if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
                             let error_response = ServerToClientMessage::SystemError {
@@ -374,10 +417,8 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                             if let Ok(ws_msg) = error_response.to_ws_text() {
                                 if client_tx.send(ws_msg).await.is_err() {
                                     tracing::warn!(
-                                        "Lobby {} (Game: {}): Failed to send error response to client {}",
-                                        self.lobby_id,
-                                        self.game_engine.game_type_id(),
-                                        client_id
+                                        client.id = %client_id,
+                                        "Failed to send error response to client"
                                     );
                                 }
                             }
@@ -390,10 +431,8 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 client_tx,
             } => {
                 tracing::debug!(
-                    "Lobby {} (Game: {}): Delegating client {} connect.",
-                    self.lobby_id,
-                    self.game_engine.game_type_id(),
-                    client_id
+                    client.id = %client_id,
+                    "Client connected"
                 );
                 self.game_engine
                     .client_connected(client_id, client_tx)
@@ -403,31 +442,25 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             }
             LobbyActorMessage::ClientDisconnected { client_id } => {
                 tracing::debug!(
-                    "Lobby {} (Game: {}): Delegating client {} disconnect.",
-                    self.lobby_id,
-                    self.game_engine.game_type_id(),
-                    client_id
+                    client.id = %client_id,
+                    "Client disconnected"
                 );
                 self.game_engine.client_disconnected(client_id).await;
             }
             LobbyActorMessage::InternalTwitchMessage(twitch_msg) => {
-                tracing::trace!(
-                    "Lobby {} (Game: {}): Received internal Twitch message for channel #{}: <{}> {}",
-                    self.lobby_id,
-                    self.game_engine.game_type_id(),
-                    twitch_msg.channel,
-                    twitch_msg.sender_username,
-                    twitch_msg.text
+                tracing::debug!(
+                    twitch.channel = %twitch_msg.channel,
+                    twitch.sender = %twitch_msg.sender_username,
+                    twitch.text = %twitch_msg.text,
+                    "Received Twitch message"
                 );
                 self.game_engine.handle_twitch_message(twitch_msg).await;
             }
             LobbyActorMessage::InternalTwitchStatusUpdate(status) => {
                 tracing::info!(
-                    "Lobby {} (Game: {}): Twitch channel '{}' status update: {:?}",
-                    self.lobby_id,
-                    self.game_engine.game_type_id(),
-                    self.twitch_channel_name.as_deref().unwrap_or("N/A"),
-                    status
+                    twitch.channel = %self.twitch_channel_name.as_deref().unwrap_or("N/A"),
+                    twitch.status = ?status,
+                    "Twitch channel status update"
                 );
 
                 self.broadcast_twitch_status_update(status).await;
@@ -479,9 +512,8 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             Ok(msg) => msg,
             Err(e) => {
                 tracing::error!(
-                    "Lobby {}: Failed to serialize Twitch status update: {}",
-                    self.lobby_id,
-                    e
+                    error = %e,
+                    "Failed to serialize Twitch status update"
                 );
                 return;
             }
@@ -494,9 +526,8 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
                     if client_tx.send(ws_msg.clone()).await.is_err() {
                         tracing::warn!(
-                            "Lobby {}: Failed to send Twitch status update to client {}",
-                            self.lobby_id,
-                            client_id
+                            client.id = %client_id,
+                            "Failed to send Twitch status update to client"
                         );
                     }
                 }
@@ -564,10 +595,9 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             Ok(msg) => msg,
             Err(e) => {
                 tracing::error!(
-                    "Lobby {}: Failed to serialize initial Twitch status for client {}: {}",
-                    self.lobby_id,
-                    client_id,
-                    e
+                    client.id = %client_id,
+                    error = %e,
+                    "Failed to serialize initial Twitch status for client"
                 );
                 return;
             }
@@ -577,9 +607,8 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             if let Ok(ws_msg) = global_event_message.to_ws_text() {
                 if client_tx.send(ws_msg).await.is_err() {
                     tracing::warn!(
-                        "Lobby {}: Failed to send initial Twitch status to client {}",
-                        self.lobby_id,
-                        client_id
+                        client.id = %client_id,
+                        "Failed to send initial Twitch status to client"
                     );
                 }
             }
@@ -587,16 +616,16 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
     }
 }
 
+#[tracing::instrument(skip(actor, self_sender), fields(
+    lobby.id = %actor.lobby_id,
+    game.type = %actor.game_engine.game_type_id(),
+    twitch.channel = %actor.twitch_channel_name.as_deref().unwrap_or("N/A")
+))]
 pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
     mut actor: LobbyActor<G>,
     self_sender: mpsc::Sender<LobbyActorMessage>,
 ) {
-    tracing::info!(
-        "Lobby Actor {} (Game: {}) started. Twitch Channel: {:?}",
-        actor.lobby_id,
-        actor.game_engine.game_type_id(),
-        actor.twitch_channel_name
-    );
+    tracing::info!("Lobby actor started");
 
     let mut twitch_message_rx_option: Option<mpsc::Receiver<ParsedTwitchMessage>> = None;
     let mut twitch_status_rx_option: Option<
@@ -607,6 +636,11 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
         let (tx_for_lobby_messages, rx_for_lobby_messages) = mpsc::channel(128);
         twitch_message_rx_option = Some(rx_for_lobby_messages);
 
+        tracing::info!(
+            twitch.channel = %channel_name,
+            "Subscribing to Twitch channel"
+        );
+
         match actor
             .twitch_chat_manager_handle
             .subscribe_to_channel(channel_name.clone(), actor.lobby_id, tx_for_lobby_messages)
@@ -614,19 +648,17 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
         {
             Ok(status_receiver) => {
                 tracing::info!(
-                    "Lobby {}: Successfully subscribed to Twitch channel '{}'",
-                    actor.lobby_id,
-                    channel_name
+                    twitch.channel = %channel_name,
+                    "Successfully subscribed to Twitch channel"
                 );
                 actor.twitch_status_receiver = Some(status_receiver.clone());
                 twitch_status_rx_option = Some(status_receiver);
             }
             Err(e) => {
                 tracing::error!(
-                    "Lobby {}: Failed to subscribe to Twitch channel '{}': {:?}",
-                    actor.lobby_id,
-                    channel_name,
-                    e
+                    twitch.channel = %channel_name,
+                    error = ?e,
+                    "Failed to subscribe to Twitch channel"
                 );
                 twitch_message_rx_option = None;
             }
@@ -635,60 +667,45 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
 
     if let Some(mut receiver) = twitch_message_rx_option {
         let actor_sender_clone = self_sender.clone();
-        let lobby_id_clone = actor.lobby_id;
+        let _lobby_id_clone = actor.lobby_id;
         actor._twitch_message_task_handle = Some(tokio::spawn(async move {
-            tracing::debug!(
-                "Lobby {}: Twitch message listener task started.",
-                lobby_id_clone
-            );
+            tracing::debug!("Twitch message listener task started");
             while let Some(twitch_msg) = receiver.recv().await {
                 if actor_sender_clone
                     .send(LobbyActorMessage::InternalTwitchMessage(twitch_msg))
                     .await
                     .is_err()
                 {
-                    tracing::warn!(
-                        "Lobby {}: Failed to send internal Twitch message to self.",
-                        lobby_id_clone
-                    );
+                    tracing::warn!("Failed to send internal Twitch message to self");
                     break;
                 }
             }
-            tracing::debug!(
-                "Lobby {}: Twitch message listener task stopped.",
-                lobby_id_clone
-            );
+            tracing::debug!("Twitch message listener task stopped");
         }));
     }
 
     if let Some(mut status_receiver) = twitch_status_rx_option {
         let actor_sender_clone = self_sender.clone();
-        let lobby_id_clone = actor.lobby_id;
+        let _lobby_id_clone = actor.lobby_id;
         actor._twitch_status_task_handle = Some(tokio::spawn(async move {
-            tracing::debug!(
-                "Lobby {}: Twitch status listener task started.",
-                lobby_id_clone
-            );
+            tracing::debug!("Twitch status listener task started");
             loop {
                 tokio::select! {
                     changed_result = status_receiver.changed() => {
                         if changed_result.is_err() {
-                            tracing::info!("Lobby {}: Twitch status channel closed.", lobby_id_clone);
+                            tracing::info!("Twitch status channel closed");
                             break;
                         }
                         let status = status_receiver.borrow_and_update().clone();
                          if actor_sender_clone.send(LobbyActorMessage::InternalTwitchStatusUpdate(status)).await.is_err() {
-                            tracing::warn!("Lobby {}: Failed to send internal Twitch status to self.", lobby_id_clone);
+                            tracing::warn!("Failed to send internal Twitch status to self");
                             break;
                         }
                     }
                     else => break,
                 }
             }
-            tracing::debug!(
-                "Lobby {}: Twitch status listener task stopped.",
-                lobby_id_clone
-            );
+            tracing::debug!("Twitch status listener task stopped");
         }));
     }
 
@@ -702,45 +719,36 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                     Some(msg) => {
                         if matches!(msg, LobbyActorMessage::ProcessEvent { .. }) {
                             last_client_ws_activity = Instant::now();
-                            tracing::trace!( // Changed to trace to reduce log spam for this common event
-                                "Lobby {} Actor (Game: {}): Client WS activity detected. Resetting 60-min inactivity timer.",
-                                actor.lobby_id, actor.game_engine.game_type_id()
-                            );
+                            tracing::trace!("Client WS activity detected. Resetting inactivity timer");
                         }
                         actor.handle_message(msg).await;
                     }
                     None => {
-                        tracing::info!("Lobby Actor {} (Game: {}): Channel closed. Shutting down.",
-                            actor.lobby_id, actor.game_engine.game_type_id());
+                        tracing::info!("Lobby actor channel closed. Shutting down");
                         break;
                     }
                 }
             }
             _ = tokio::time::sleep_until(last_client_ws_activity + client_ws_inactivity_timeout_duration), if !actor.game_engine.is_empty() => {
                  // Only run inactivity timeout if there are clients.
-                tracing::info!(
-                    "Lobby {} Actor (Game: {}): 60-minute inactivity (no client WebSocket messages received). Notifying manager for shutdown.",
-                    actor.lobby_id, actor.game_engine.game_type_id()
-                );
+                tracing::info!("Lobby inactivity timeout. Notifying manager for shutdown");
                 if let Err(e) = actor.manager_handle.notify_lobby_shutdown(actor.lobby_id).await {
-                    tracing::error!("Lobby {} Actor: Failed to notify LobbyManager of shutdown: {}", actor.lobby_id, e);
+                    tracing::error!(
+                        error = %e,
+                        "Failed to notify LobbyManager of shutdown"
+                    );
                 }
                 break;
             }
         }
     }
 
-    tracing::info!(
-        "Lobby Actor {} (Game: {}) stopping.",
-        actor.lobby_id,
-        actor.game_engine.game_type_id()
-    );
+    tracing::info!("Lobby actor stopping");
 
     if let Some(ref channel_name) = actor.twitch_channel_name {
         tracing::info!(
-            "Lobby {}: Unsubscribing from Twitch channel '{}'",
-            actor.lobby_id,
-            channel_name
+            twitch.channel = %channel_name,
+            "Unsubscribing from Twitch channel"
         );
         if let Err(e) = actor
             .twitch_chat_manager_handle
@@ -748,10 +756,9 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
             .await
         {
             tracing::error!(
-                "Lobby {}: Failed to unsubscribe from Twitch channel '{}': {:?}",
-                actor.lobby_id,
-                channel_name,
-                e
+                twitch.channel = %channel_name,
+                error = ?e,
+                "Failed to unsubscribe from Twitch channel"
             );
         }
     }
@@ -812,7 +819,7 @@ impl LobbyActorHandle {
             .await
             .is_err()
         {
-            tracing::error!("Lobby {}: Failed to send ClientConnected", self.lobby_id);
+            tracing::error!("Failed to send ClientConnected");
         }
     }
 
@@ -823,7 +830,7 @@ impl LobbyActorHandle {
             .await
             .is_err()
         {
-            tracing::error!("Lobby {}: Failed to send ClientDisconnected", self.lobby_id);
+            tracing::error!("Failed to send ClientDisconnected");
         }
     }
 }
