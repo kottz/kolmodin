@@ -4,7 +4,7 @@ use crate::config::ServerConfig;
 use crate::db::WordListManager;
 use crate::lobby::LobbyManagerHandle;
 use crate::twitch::TokenProvider;
-use crate::twitch::actors::TwitchChatManagerActorHandle;
+use crate::twitch::TwitchChatManagerActorHandle;
 
 #[derive(Clone)]
 pub struct AppState {

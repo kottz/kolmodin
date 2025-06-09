@@ -29,6 +29,8 @@ pub enum TwitchError {
     InternalActorError(String),
     #[error("IRC Task failed to send to actor: {0}")]
     IrcTaskSendError(String),
+    #[error("Twitch IRC connection error: {0}")]
+    TwitchConnection(String),
 }
 
 pub type Result<T, E = TwitchError> = std::result::Result<T, E>;
