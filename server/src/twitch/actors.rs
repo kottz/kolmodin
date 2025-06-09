@@ -6,9 +6,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use super::auth::TokenProvider;
 use super::error::{Result as TwitchResult, TwitchError};
 use super::irc_parser::IrcMessage;
-use super::token_provider::TokenProvider;
 use super::types::{ChannelTerminationInfo, ParsedTwitchMessage, TwitchChannelConnectionStatus};
 
 #[derive(Debug)]

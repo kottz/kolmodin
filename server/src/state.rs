@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::config::ServerConfig;
 use crate::db::WordListManager;
 use crate::lobby::LobbyManagerHandle;
+use crate::twitch::TokenProvider;
 use crate::twitch::actors::TwitchChatManagerActorHandle;
-use crate::twitch::token_provider::TokenProvider;
 
 #[derive(Clone)]
 pub struct AppState {

@@ -15,8 +15,8 @@ use crate::db::WordListManager;
 use crate::error::Result as AppResult;
 use crate::lobby::LobbyManagerHandle;
 use crate::state::AppState;
+use crate::twitch::TokenProvider;
 use crate::twitch::TwitchChatManagerActorHandle;
-use crate::twitch::token_provider::TokenProvider;
 use crate::web::run_server;
 
 #[tokio::main]
