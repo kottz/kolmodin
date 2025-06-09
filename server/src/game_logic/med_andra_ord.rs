@@ -472,11 +472,7 @@ impl GameLogic for MedAndraOrdGameState {
                 return;
             }
 
-            // Prevent processing if current word is a placeholder
-            if self.current_word_list.is_empty()
-                || current_word == "Inga ord!"
-                || current_word == "Slut på ord!"
-            {
+            if self.current_word_list.is_empty() {
                 return;
             }
 

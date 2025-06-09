@@ -1,20 +1,73 @@
-use crate::config::{DatabaseConfig, MedAndraOrdWordsConfig, WordListSourceType};
+use crate::config::{DataSourceType, DatabaseConfig};
 use crate::error::{DbError, Result as AppResult};
 use std::collections::HashMap;
-use std::fs;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Default)]
-pub struct GameDataFile {
+pub struct GameData {
     pub twitch_whitelist: Vec<String>,
     pub medandraord_words: Vec<String>,
+}
+
+#[async_trait::async_trait]
+pub trait DataSource {
+    async fn load(&self) -> Result<String, DbError>;
+}
+
+pub struct FileDataSource {
+    file_path: String,
+}
+
+impl FileDataSource {
+    pub fn new(file_path: String) -> Self {
+        Self { file_path }
+    }
+}
+
+#[async_trait::async_trait]
+impl DataSource for FileDataSource {
+    async fn load(&self) -> Result<String, DbError> {
+        tokio::fs::read_to_string(&self.file_path)
+            .await
+            .map_err(|e| DbError::FileRead {
+                path: self.file_path.clone(),
+                source: e,
+            })
+    }
+}
+
+pub struct HttpDataSource {
+    url: String,
+}
+
+impl HttpDataSource {
+    pub fn new(url: String) -> Self {
+        Self { url }
+    }
+}
+
+#[async_trait::async_trait]
+impl DataSource for HttpDataSource {
+    async fn load(&self) -> Result<String, DbError> {
+        let response = reqwest::get(&self.url)
+            .await
+            .map_err(|e| DbError::HttpFetch {
+                url: self.url.clone(),
+                source: e,
+            })?;
+
+        response.text().await.map_err(|e| DbError::HttpFetch {
+            url: self.url.clone(),
+            source: e,
+        })
+    }
 }
 
 pub struct DataFileParser;
 
 impl DataFileParser {
-    pub fn parse_data_file(content: &str) -> Result<GameDataFile, DbError> {
+    pub fn parse_structured_data(content: &str) -> Result<GameData, DbError> {
         let mut sections = HashMap::new();
         let mut current_section: Option<String> = None;
         let mut current_items = Vec::new();
@@ -26,14 +79,13 @@ impl DataFileParser {
                 continue;
             }
 
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                if let Some(section_name) = current_section.take() {
-                    sections.insert(section_name, current_items.clone());
+            if let Some(section_name) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+            {
+                if let Some(prev_section) = current_section.take() {
+                    sections.insert(prev_section, current_items.clone());
                     current_items.clear();
                 }
-
-                let section_name = trimmed[1..trimmed.len() - 1].to_string();
-                current_section = Some(section_name);
+                current_section = Some(section_name.to_string());
             } else if current_section.is_some() {
                 current_items.push(trimmed.to_string());
             }
@@ -61,157 +113,98 @@ impl DataFileParser {
             .filter(|s| !s.is_empty())
             .collect();
 
-        Ok(GameDataFile {
+        Ok(GameData {
             twitch_whitelist,
             medandraord_words,
         })
     }
 }
 
+pub struct DataManager {
+    data_source: Box<dyn DataSource + Send + Sync>,
+}
+
+impl DataManager {
+    pub fn new(config: &DatabaseConfig) -> Result<Self, DbError> {
+        let data_source = match &config.source_type {
+            DataSourceType::File => {
+                let file_path = config.file_path.as_ref().ok_or_else(|| {
+                    DbError::Config("File path required for file source".to_string())
+                })?;
+                Box::new(FileDataSource::new(file_path.clone()))
+                    as Box<dyn DataSource + Send + Sync>
+            }
+            DataSourceType::Http => {
+                let url = config.http_url.as_ref().ok_or_else(|| {
+                    DbError::Config("HTTP URL required for http source".to_string())
+                })?;
+                Box::new(HttpDataSource::new(url.clone())) as Box<dyn DataSource + Send + Sync>
+            }
+        };
+
+        Ok(Self { data_source })
+    }
+
+    pub async fn load_game_data(&self) -> Result<GameData, DbError> {
+        let content = self.data_source.load().await?;
+        let game_data = DataFileParser::parse_structured_data(&content)?;
+
+        tracing::info!(
+            "Loaded structured data: {} twitch channels, {} words",
+            game_data.twitch_whitelist.len(),
+            game_data.medandraord_words.len()
+        );
+
+        Ok(game_data)
+    }
+}
+
 pub struct WordListManager {
-    med_andra_ord_words: RwLock<Arc<Vec<String>>>,
+    medandraord_words: RwLock<Arc<Vec<String>>>,
     twitch_whitelist: RwLock<Arc<Vec<String>>>,
-    config: DatabaseConfig,
+    data_manager: DataManager,
 }
 
 impl WordListManager {
     pub async fn new(config: DatabaseConfig) -> AppResult<Self> {
-        let initial_data = Self::fetch_data_from_sources(&config)
-            .await
-            .unwrap_or_else(|err| {
-                tracing::warn!("Initial data load failed: {:?}. Using empty lists.", err);
-                GameDataFile::default()
-            });
+        let data_manager = DataManager::new(&config)?;
+        let initial_data = data_manager.load_game_data().await.map_err(|err| {
+            tracing::error!("Failed to load required data file: {}", err);
+            err
+        })?;
+
+        tracing::info!(
+            "Successfully loaded data: {} twitch channels, {} words",
+            initial_data.twitch_whitelist.len(),
+            initial_data.medandraord_words.len()
+        );
 
         Ok(Self {
-            med_andra_ord_words: RwLock::new(Arc::new(initial_data.medandraord_words)),
+            medandraord_words: RwLock::new(Arc::new(initial_data.medandraord_words)),
             twitch_whitelist: RwLock::new(Arc::new(initial_data.twitch_whitelist)),
-            config,
+            data_manager,
         })
-    }
-
-    async fn fetch_data_from_sources(config: &DatabaseConfig) -> Result<GameDataFile, DbError> {
-        let data_file_path = &config.data_file.file_path;
-        tracing::info!("Attempting to read data from file: {}", data_file_path);
-
-        if let Ok(content) = fs::read_to_string(data_file_path) {
-            tracing::info!("Successfully read data file, parsing sections");
-            let parsed_data = DataFileParser::parse_data_file(&content)?;
-
-            tracing::info!(
-                "Parsed data file: {} twitch channels, {} words",
-                parsed_data.twitch_whitelist.len(),
-                parsed_data.medandraord_words.len()
-            );
-
-            return Ok(parsed_data);
-        }
-
-        tracing::warn!(
-            "Could not read data file {}, falling back to legacy word source",
-            data_file_path
-        );
-
-        let words = Self::fetch_words_from_legacy_source(&config.med_andra_ord_words)
-            .await
-            .unwrap_or_else(|err| {
-                tracing::warn!(
-                    "Legacy word source also failed: {:?}. Using empty list.",
-                    err
-                );
-                Vec::new()
-            });
-
-        Ok(GameDataFile {
-            twitch_whitelist: Vec::new(),
-            medandraord_words: words,
-        })
-    }
-
-    async fn fetch_words_from_legacy_source(
-        mao_config: &MedAndraOrdWordsConfig,
-    ) -> Result<Vec<String>, DbError> {
-        tracing::info!(
-            "Fetching MedAndraOrd words from legacy source: {:?}",
-            mao_config.source_type
-        );
-        let content = match mao_config.source_type {
-            WordListSourceType::File => {
-                let path = mao_config.file_path.as_ref().ok_or_else(|| {
-                    DbError::Config("File path missing for file source type".to_string())
-                })?;
-                tracing::info!("Reading MedAndraOrd words from legacy file: {}", path);
-                fs::read_to_string(path).map_err(|e| DbError::FileRead {
-                    path: path.clone(),
-                    source: e,
-                })?
-            }
-            WordListSourceType::Http => {
-                let url = mao_config.http_url.as_ref().ok_or_else(|| {
-                    DbError::Config("HTTP URL missing for http source type".to_string())
-                })?;
-                tracing::info!("Fetching MedAndraOrd words from URL: {}", url);
-                reqwest::get(url)
-                    .await
-                    .map_err(|e| DbError::HttpFetch {
-                        url: url.clone(),
-                        source: e,
-                    })?
-                    .text()
-                    .await
-                    .map_err(|e| DbError::HttpFetch {
-                        url: url.clone(),
-                        source: e,
-                    })?
-            }
-            WordListSourceType::None => {
-                tracing::info!("MedAndraOrd word source type is None. Returning empty list.");
-                return Ok(Vec::new());
-            }
-        };
-
-        let words: Vec<String> = content
-            .lines()
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
-
-        if words.is_empty() && mao_config.source_type != WordListSourceType::None {
-            tracing::warn!("Fetched MedAndraOrd word list is empty.");
-        }
-        tracing::info!(
-            "Successfully loaded {} MedAndraOrd words from legacy source.",
-            words.len()
-        );
-        Ok(words)
     }
 
     pub async fn refresh_data(&self) -> AppResult<()> {
-        match Self::fetch_data_from_sources(&self.config).await {
-            Ok(new_data) => {
-                {
-                    let mut words_guard = self.med_andra_ord_words.write().await;
-                    *words_guard = Arc::new(new_data.medandraord_words);
-                    tracing::info!(
-                        "Successfully refreshed MedAndraOrd words. New count: {}",
-                        words_guard.len()
-                    );
-                }
-                {
-                    let mut whitelist_guard = self.twitch_whitelist.write().await;
-                    *whitelist_guard = Arc::new(new_data.twitch_whitelist);
-                    tracing::info!(
-                        "Successfully refreshed Twitch whitelist. New count: {}",
-                        whitelist_guard.len()
-                    );
-                }
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to refresh data: {:?}", e);
-                Err(e.into())
-            }
+        let new_data = self.data_manager.load_game_data().await?;
+
+        {
+            let mut words_guard = self.medandraord_words.write().await;
+            *words_guard = Arc::new(new_data.medandraord_words);
+            tracing::info!("Refreshed medandraord words. Count: {}", words_guard.len());
         }
+
+        {
+            let mut whitelist_guard = self.twitch_whitelist.write().await;
+            *whitelist_guard = Arc::new(new_data.twitch_whitelist);
+            tracing::info!(
+                "Refreshed twitch whitelist. Count: {}",
+                whitelist_guard.len()
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn refresh_med_andra_ord_words(&self) -> AppResult<()> {
@@ -219,7 +212,7 @@ impl WordListManager {
     }
 
     pub async fn get_med_andra_ord_words(&self) -> Arc<Vec<String>> {
-        self.med_andra_ord_words.read().await.clone()
+        self.medandraord_words.read().await.clone()
     }
 
     pub async fn get_twitch_whitelist(&self) -> Arc<Vec<String>> {
@@ -242,11 +235,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_data_file_parser() {
-        let test_content = r#"[twitch_whitelist]
+    fn test_parse_structured_data() {
+        let content = r#"[twitch_whitelist]
 testchannel
 example_user
-
 
 [medandraord_words]
 word1
@@ -254,33 +246,30 @@ word2
 word3
 "#;
 
-        let result = DataFileParser::parse_data_file(test_content).unwrap();
-
+        let result = DataFileParser::parse_structured_data(content).unwrap();
         assert_eq!(result.twitch_whitelist, vec!["testchannel", "example_user"]);
         assert_eq!(result.medandraord_words, vec!["word1", "word2", "word3"]);
     }
 
     #[test]
-    fn test_data_file_parser_empty_sections() {
-        let test_content = r#"[twitch_whitelist]
+    fn test_parse_structured_data_empty_sections() {
+        let content = r#"[twitch_whitelist]
 
 [medandraord_words]
 "#;
 
-        let result = DataFileParser::parse_data_file(test_content).unwrap();
-
+        let result = DataFileParser::parse_structured_data(content).unwrap();
         assert!(result.twitch_whitelist.is_empty());
         assert!(result.medandraord_words.is_empty());
     }
 
     #[test]
-    fn test_data_file_parser_missing_sections() {
-        let test_content = r#"[other_section]
+    fn test_parse_structured_data_missing_sections() {
+        let content = r#"[other_section]
 ignored_item
 "#;
 
-        let result = DataFileParser::parse_data_file(test_content).unwrap();
-
+        let result = DataFileParser::parse_structured_data(content).unwrap();
         assert!(result.twitch_whitelist.is_empty());
         assert!(result.medandraord_words.is_empty());
     }

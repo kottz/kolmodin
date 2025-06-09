@@ -35,48 +35,16 @@ impl Default for GamesConfig {
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum WordListSourceType {
+pub enum DataSourceType {
     File,
     Http,
-    None,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct DataFileConfig {
-    pub file_path: String,
-}
-
-impl Default for DataFileConfig {
-    fn default() -> Self {
-        Self {
-            file_path: "kolmodin_data.txt".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct MedAndraOrdWordsConfig {
-    pub source_type: WordListSourceType,
+pub struct DatabaseConfig {
+    pub source_type: DataSourceType,
     pub file_path: Option<String>,
     pub http_url: Option<String>,
-}
-
-impl Default for MedAndraOrdWordsConfig {
-    fn default() -> Self {
-        Self {
-            source_type: WordListSourceType::File,
-            file_path: Some("words.txt".to_string()),
-            http_url: None,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct DatabaseConfig {
-    #[serde(default)]
-    pub data_file: DataFileConfig,
-    #[serde(default)]
-    pub med_andra_ord_words: MedAndraOrdWordsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,7 +52,6 @@ pub struct AppSettings {
     pub server: ServerConfig,
     pub twitch: TwitchConfig,
     pub games: GamesConfig,
-    #[serde(default)]
     pub database: DatabaseConfig,
 }
 
@@ -93,11 +60,6 @@ pub fn load_settings() -> AppResult<AppSettings> {
         .iter()
         .map(|game_type| Value::new(None, ValueKind::String(game_type.primary_id().to_string())))
         .collect();
-
-    let default_data_file_path =
-        Value::new(None, ValueKind::String("kolmodin_data.txt".to_string()));
-    let default_db_mao_source_type = Value::new(None, ValueKind::String("file".to_string()));
-    let default_db_mao_file_path = Value::new(None, ValueKind::String("words.txt".to_string()));
 
     let settings_builder = Config::builder()
         .add_source(
@@ -115,19 +77,6 @@ pub fn load_settings() -> AppResult<AppSettings> {
         .set_default(
             "games.enabled_types",
             Value::new(None, ValueKind::Array(default_games_enabled_types)),
-        )?
-        .set_default("database.data_file.file_path", default_data_file_path)?
-        .set_default(
-            "database.med_andra_ord_words.source_type",
-            default_db_mao_source_type,
-        )?
-        .set_default(
-            "database.med_andra_ord_words.file_path",
-            default_db_mao_file_path,
-        )?
-        .set_default(
-            "database.med_andra_ord_words.http_url",
-            Value::new(None, ValueKind::Nil),
         )?;
 
     let settings = settings_builder
@@ -158,29 +107,23 @@ pub fn load_settings() -> AppResult<AppSettings> {
         return Err(ConfigError::Missing("twitch.client_secret".to_string()).into());
     }
 
-    match app_settings.database.med_andra_ord_words.source_type {
-        WordListSourceType::File => {
-            if app_settings
-                .database
-                .med_andra_ord_words
-                .file_path
-                .is_none()
-            {
+    match app_settings.database.source_type {
+        DataSourceType::File => {
+            if app_settings.database.file_path.is_none() {
                 return Err(ConfigError::Missing(
-                    "database.med_andra_ord_words.file_path (for source_type 'file')".to_string(),
+                    "database.file_path (for source_type 'file')".to_string(),
                 )
                 .into());
             }
         }
-        WordListSourceType::Http => {
-            if app_settings.database.med_andra_ord_words.http_url.is_none() {
+        DataSourceType::Http => {
+            if app_settings.database.http_url.is_none() {
                 return Err(ConfigError::Missing(
-                    "database.med_andra_ord_words.http_url (for source_type 'http')".to_string(),
+                    "database.http_url (for source_type 'http')".to_string(),
                 )
                 .into());
             }
         }
-        WordListSourceType::None => {}
     }
 
     Ok(app_settings)
