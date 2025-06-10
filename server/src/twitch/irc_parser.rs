@@ -1,6 +1,7 @@
 use super::types::ParsedTwitchMessage;
 use chrono::Utc;
 use std::collections::HashMap;
+use thiserror::Error;
 
 // IRC Commands
 pub const CMD_PING: &str = "PING";
@@ -35,7 +36,23 @@ pub const AUTH_ERROR_LOGIN_FAILED: &str = "Login authentication failed";
 pub const AUTH_ERROR_IMPROPERLY_FORMATTED: &str = "Improperly formatted auth";
 pub const AUTH_ERROR_INVALID_NICK: &str = "Invalid NICK";
 
-#[derive(Debug, Default)]
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum IrcParseError {
+    #[error("Input line is empty or only whitespace")]
+    EmptyInput,
+    #[error(
+        "Tags section is malformed (starts with '@' but has no following space before command/prefix)"
+    )]
+    MalformedTags,
+    #[error(
+        "Prefix section is malformed (starts with ':' but has no following space before command)"
+    )]
+    MalformedPrefix,
+    #[error("No command found in the message")]
+    MissingCommand,
+}
+
+#[derive(Debug, Default, PartialEq)]
 pub struct IrcMessage<'a> {
     raw: &'a str,
     tags: Option<&'a str>,
@@ -57,36 +74,55 @@ impl<'a> IrcMessage<'a> {
         &self.params
     }
 
-    pub fn parse(line: &'a str) -> Self {
+    pub fn parse(line: &'a str) -> Result<Self, IrcParseError> {
+        // Initial trim and empty check
+        let mut remainder = line.trim_end_matches(['\r', '\n']);
+
+        // Check for empty input
+        if remainder.trim().is_empty() {
+            return Err(IrcParseError::EmptyInput);
+        }
+
         let mut message = IrcMessage {
             raw: line,
             ..Default::default()
         };
-        let mut remainder = line.trim_end_matches(['\r', '\n']);
 
+        // Parse tags section
         if remainder.starts_with('@') {
             if let Some(space_idx) = remainder.find(' ') {
                 message.tags = Some(&remainder[1..space_idx]);
                 remainder = &remainder[space_idx + 1..];
             } else {
-                message.tags = Some(&remainder[1..]);
-                return message;
+                // Line contains only tags, which is invalid IRC
+                return Err(IrcParseError::MalformedTags);
             }
         }
+
+        // Parse prefix section
         if remainder.starts_with(':') {
             if let Some(space_idx) = remainder.find(' ') {
                 message.prefix = Some(&remainder[1..space_idx]);
                 remainder = &remainder[space_idx + 1..];
             } else {
-                message.prefix = Some(&remainder[1..]);
-                return message;
+                // Line contains only prefix, which is invalid IRC
+                return Err(IrcParseError::MalformedPrefix);
             }
         }
+
+        // Parse command and parameters
         if let Some(trail_marker_idx) = remainder.find(" :") {
             let command_and_middle_params_part = &remainder[..trail_marker_idx];
             let trailing_param = &remainder[trail_marker_idx + 2..];
             let mut parts = command_and_middle_params_part.split(' ');
+
+            // Extract command
             message.command = parts.next().filter(|s| !s.is_empty());
+            if message.command.is_none() {
+                return Err(IrcParseError::MissingCommand);
+            }
+
+            // Extract middle parameters
             for p_str in parts {
                 if !p_str.is_empty() {
                     message.params.push(p_str);
@@ -95,14 +131,22 @@ impl<'a> IrcMessage<'a> {
             message.params.push(trailing_param);
         } else {
             let mut parts = remainder.split(' ');
+
+            // Extract command
             message.command = parts.next().filter(|s| !s.is_empty());
+            if message.command.is_none() {
+                return Err(IrcParseError::MissingCommand);
+            }
+
+            // Extract parameters
             for p_str in parts {
                 if !p_str.is_empty() {
                     message.params.push(p_str);
                 }
             }
         }
-        message
+
+        Ok(message)
     }
 
     pub fn get_tag_value(&self, key_to_find: &str) -> Option<&'a str> {
@@ -211,5 +255,63 @@ impl<'a> IrcMessage<'a> {
             },
             timestamp: Utc::now(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_input() {
+        assert_eq!(IrcMessage::parse(""), Err(IrcParseError::EmptyInput));
+        assert_eq!(IrcMessage::parse("   "), Err(IrcParseError::EmptyInput));
+        assert_eq!(IrcMessage::parse("\r\n"), Err(IrcParseError::EmptyInput));
+    }
+
+    #[test]
+    fn test_malformed_tags() {
+        assert_eq!(
+            IrcMessage::parse("@tag1=value1"),
+            Err(IrcParseError::MalformedTags)
+        );
+        assert_eq!(
+            IrcMessage::parse("@tag1=value1COMMAND"),
+            Err(IrcParseError::MalformedTags)
+        );
+    }
+
+    #[test]
+    fn test_malformed_prefix() {
+        assert_eq!(
+            IrcMessage::parse(":nick!user@host"),
+            Err(IrcParseError::MalformedPrefix)
+        );
+        assert_eq!(
+            IrcMessage::parse(":nick!user@hostCOMMAND"),
+            Err(IrcParseError::MalformedPrefix)
+        );
+    }
+
+    #[test]
+    fn test_missing_command() {
+        assert_eq!(
+            IrcMessage::parse("@tag1=value1 "),
+            Err(IrcParseError::MissingCommand)
+        );
+        assert_eq!(
+            IrcMessage::parse(":nick!user@host "),
+            Err(IrcParseError::MissingCommand)
+        );
+    }
+
+    #[test]
+    fn test_valid_messages() {
+        assert!(IrcMessage::parse("COMMAND").is_ok());
+        assert!(IrcMessage::parse("COMMAND param1").is_ok());
+        assert!(IrcMessage::parse("COMMAND param1 :trailing param").is_ok());
+        assert!(IrcMessage::parse("COMMAND :").is_ok());
+        assert!(IrcMessage::parse(":tmi.twitch.tv PONG tmi.twitch.tv :health-check").is_ok());
+        assert!(IrcMessage::parse("@badge-info=;badges=;color=;display-name=TestUser;emotes=;first-msg=0;flags=;id=abc;mod=0;returning-chatter=0;room-id=123;subscriber=0;turbo=0;user-id=456;user-type= :testuser!testuser@testuser.tmi.twitch.tv PRIVMSG #channel :Hello World").is_ok());
     }
 }

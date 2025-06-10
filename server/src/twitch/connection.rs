@@ -552,172 +552,58 @@ async fn connect_and_listen_irc_single_attempt_adapted(
         }
 
         // Handle IRC protocol messages using proper IRC parsing
-        let parsed_irc_msg = IrcMessage::parse(&message_line_owned);
-
-        match parsed_irc_msg.command() {
-            Some(CMD_PING) => {
-                let server = parsed_irc_msg
-                    .params()
-                    .first()
-                    .copied()
-                    .unwrap_or(":tmi.twitch.tv");
-                tracing::trace!(
-                    channel.name = %channel_name,
-                    actor.id = %actor_id_for_logging,
-                    server = %server,
-                    "Received server PING, responding with PONG"
-                );
-                writer
-                    .write_all(format!("{} {}\r\n", CMD_PONG, server).as_bytes())
-                    .await
-                    .map_err(TwitchError::Io)?;
-                writer.flush().await.map_err(TwitchError::Io)?;
-            }
-            Some(CMD_PONG) => {
-                // The PONG parameters are usually <server> [:<text sent in PING>]
-                // We are interested in the text part if it exists.
-                let pong_payload = parsed_irc_msg
-                    .params()
-                    .get(1)
-                    .map(|s| s.trim_start_matches(':'));
-
-                if pending_health_check_pong && pong_payload == Some("health-check") {
-                    let response_time =
-                        tokio::time::Instant::now().duration_since(last_health_check_ping_sent);
-                    tracing::debug!(
-                        channel.name = %channel_name,
-                        actor.id = %actor_id_for_logging,
-                        response_time = ?response_time,
-                        "Health check PONG received correctly"
-                    );
-                    pending_health_check_pong = false;
-                } else {
+        match IrcMessage::parse(&message_line_owned) {
+            Ok(parsed_irc_msg) => match parsed_irc_msg.command() {
+                Some(CMD_PING) => {
+                    let server = parsed_irc_msg
+                        .params()
+                        .first()
+                        .copied()
+                        .unwrap_or(":tmi.twitch.tv");
                     tracing::trace!(
                         channel.name = %channel_name,
                         actor.id = %actor_id_for_logging,
-                        payload = ?pong_payload,
-                        "Received PONG (not for health check or unexpected payload)"
+                        server = %server,
+                        "Received server PING, responding with PONG"
                     );
+                    writer
+                        .write_all(format!("{} {}\r\n", CMD_PONG, server).as_bytes())
+                        .await
+                        .map_err(TwitchError::Io)?;
+                    writer.flush().await.map_err(TwitchError::Io)?;
                 }
-            }
-            Some(RPL_WELCOME) => {
-                tracing::info!(
-                    channel.name = %channel_name,
-                    actor.id = %actor_id_for_logging,
-                    "Authenticated successfully (RPL_WELCOME). Joining channel..."
-                );
-                if actor_tx
-                    .send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
-                        new_status: TwitchChannelConnectionStatus::Connected,
-                    })
-                    .await
-                    .is_err()
-                {
-                    return Err(TwitchError::TwitchConnection(
-                        "Actor channel closed".to_string(),
-                    ));
-                }
-                writer
-                    .write_all(
-                        format!("{} #{}\r\n", CMD_JOIN, channel_name.to_lowercase()).as_bytes(),
-                    )
-                    .await
-                    .map_err(TwitchError::Io)?;
-                writer.flush().await.map_err(TwitchError::Io)?;
-            }
-            Some(CMD_JOIN) => {
-                let joining_user = parsed_irc_msg
-                    .prefix()
-                    .and_then(|p| p.split('!').next())
-                    .unwrap_or_default();
-                let joined_chan = parsed_irc_msg
-                    .params()
-                    .first()
-                    .map(|s| s.trim_start_matches('#'))
-                    .unwrap_or_default();
-                if joined_chan.eq_ignore_ascii_case(&channel_name)
-                    && joining_user.eq_ignore_ascii_case(&bot_nickname)
-                {
-                    tracing::info!(
-                        channel.name = %channel_name,
-                        actor.id = %actor_id_for_logging,
-                        nickname = %bot_nickname,
-                        "Successfully JOINED #{} as {}",
-                        joined_chan,
-                        bot_nickname
-                    );
-                    authenticated_and_joined = true;
-                    last_health_check_ping_sent = tokio::time::Instant::now();
-                    last_rate_check_time = tokio::time::Instant::now();
-                }
-            }
-            Some(CMD_NOTICE) => {
-                let notice_text = parsed_irc_msg.params().last().map_or("", |v| v);
+                Some(CMD_PONG) => {
+                    // The PONG parameters are usually <server> [:<text sent in PING>]
+                    // We are interested in the text part if it exists.
+                    let pong_payload = parsed_irc_msg
+                        .params()
+                        .get(1)
+                        .map(|s| s.trim_start_matches(':'));
 
-                if notice_text.contains(AUTH_ERROR_LOGIN_FAILED)
-                    || notice_text.contains(AUTH_ERROR_IMPROPERLY_FORMATTED)
-                    || notice_text.contains(AUTH_ERROR_INVALID_NICK)
-                {
-                    tracing::error!(
-                        channel.name = %channel_name,
-                        actor.id = %actor_id_for_logging,
-                        notice = %notice_text,
-                        "Authentication failed via NOTICE"
-                    );
-                    return Err(TwitchError::TwitchAuth(format!(
-                        "Authentication failed via NOTICE: {}",
-                        notice_text
-                    )));
-                }
-            }
-            Some(CMD_RECONNECT) => {
-                tracing::info!(
-                    channel.name = %channel_name,
-                    actor.id = %actor_id_for_logging,
-                    "Received RECONNECT command from Twitch. Closing current connection to allow re-loop"
-                );
-                return Ok(());
-            }
-            Some(CMD_CAP) => {
-                // Check for CAP ACK or NAK in the parameters
-                if parsed_irc_msg.params().len() >= 2 {
-                    let cap_command = parsed_irc_msg.params().get(1).map_or("", |v| v);
-                    if cap_command == IRC_NAK {
-                        let nak_caps = parsed_irc_msg.params().get(2).map_or("unknown", |v| v);
-                        tracing::error!(
+                    if pending_health_check_pong && pong_payload == Some("health-check") {
+                        let response_time =
+                            tokio::time::Instant::now().duration_since(last_health_check_ping_sent);
+                        tracing::debug!(
                             channel.name = %channel_name,
                             actor.id = %actor_id_for_logging,
-                            capabilities = %nak_caps,
-                            "Capability NAK. This could affect functionality"
+                            response_time = ?response_time,
+                            "Health check PONG received correctly"
                         );
-                    } else if cap_command == IRC_ACK {
-                        let ack_caps = parsed_irc_msg.params().get(2).map_or("unknown", |v| v);
-                        tracing::info!(
+                        pending_health_check_pong = false;
+                    } else {
+                        tracing::trace!(
                             channel.name = %channel_name,
                             actor.id = %actor_id_for_logging,
-                            capabilities = %ack_caps,
-                            "Capability ACK"
+                            payload = ?pong_payload,
+                            "Received PONG (not for health check or unexpected payload)"
                         );
                     }
                 }
-            }
-            Some(CMD_PRIVMSG) => {
-                if authenticated_and_joined {
-                    message_timestamps.push(tokio::time::Instant::now());
-                    if message_timestamps.len() > 1000 {
-                        let cleanup_cutoff =
-                            tokio::time::Instant::now() - (rate_window + Duration::from_secs(10));
-                        message_timestamps.retain(|&timestamp| timestamp >= cleanup_cutoff);
-                    }
-                }
-            }
-            _ => {
-                // Handle :Welcome text detection for compatibility
-                if message_line_owned.contains(IRC_WELCOME_TEXT) {
+                Some(RPL_WELCOME) => {
                     tracing::info!(
                         channel.name = %channel_name,
                         actor.id = %actor_id_for_logging,
-                        "Authenticated successfully (:Welcome). Joining channel..."
+                        "Authenticated successfully (RPL_WELCOME). Joining channel..."
                     );
                     if actor_tx
                         .send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
@@ -738,6 +624,131 @@ async fn connect_and_listen_irc_single_attempt_adapted(
                         .map_err(TwitchError::Io)?;
                     writer.flush().await.map_err(TwitchError::Io)?;
                 }
+                Some(CMD_JOIN) => {
+                    let joining_user = parsed_irc_msg
+                        .prefix()
+                        .and_then(|p| p.split('!').next())
+                        .unwrap_or_default();
+                    let joined_chan = parsed_irc_msg
+                        .params()
+                        .first()
+                        .map(|s| s.trim_start_matches('#'))
+                        .unwrap_or_default();
+                    if joined_chan.eq_ignore_ascii_case(&channel_name)
+                        && joining_user.eq_ignore_ascii_case(&bot_nickname)
+                    {
+                        tracing::info!(
+                            channel.name = %channel_name,
+                            actor.id = %actor_id_for_logging,
+                            nickname = %bot_nickname,
+                            "Successfully JOINED #{} as {}",
+                            joined_chan,
+                            bot_nickname
+                        );
+                        authenticated_and_joined = true;
+                        last_health_check_ping_sent = tokio::time::Instant::now();
+                        last_rate_check_time = tokio::time::Instant::now();
+                    }
+                }
+                Some(CMD_NOTICE) => {
+                    let notice_text = parsed_irc_msg.params().last().map_or("", |v| v);
+
+                    if notice_text.contains(AUTH_ERROR_LOGIN_FAILED)
+                        || notice_text.contains(AUTH_ERROR_IMPROPERLY_FORMATTED)
+                        || notice_text.contains(AUTH_ERROR_INVALID_NICK)
+                    {
+                        tracing::error!(
+                            channel.name = %channel_name,
+                            actor.id = %actor_id_for_logging,
+                            notice = %notice_text,
+                            "Authentication failed via NOTICE"
+                        );
+                        return Err(TwitchError::TwitchAuth(format!(
+                            "Authentication failed via NOTICE: {}",
+                            notice_text
+                        )));
+                    }
+                }
+                Some(CMD_RECONNECT) => {
+                    tracing::info!(
+                        channel.name = %channel_name,
+                        actor.id = %actor_id_for_logging,
+                        "Received RECONNECT command from Twitch. Closing current connection to allow re-loop"
+                    );
+                    return Ok(());
+                }
+                Some(CMD_CAP) => {
+                    // Check for CAP ACK or NAK in the parameters
+                    if parsed_irc_msg.params().len() >= 2 {
+                        let cap_command = parsed_irc_msg.params().get(1).map_or("", |v| v);
+                        if cap_command == IRC_NAK {
+                            let nak_caps = parsed_irc_msg.params().get(2).map_or("unknown", |v| v);
+                            tracing::error!(
+                                channel.name = %channel_name,
+                                actor.id = %actor_id_for_logging,
+                                capabilities = %nak_caps,
+                                "Capability NAK. This could affect functionality"
+                            );
+                        } else if cap_command == IRC_ACK {
+                            let ack_caps = parsed_irc_msg.params().get(2).map_or("unknown", |v| v);
+                            tracing::info!(
+                                channel.name = %channel_name,
+                                actor.id = %actor_id_for_logging,
+                                capabilities = %ack_caps,
+                                "Capability ACK"
+                            );
+                        }
+                    }
+                }
+                Some(CMD_PRIVMSG) => {
+                    if authenticated_and_joined {
+                        message_timestamps.push(tokio::time::Instant::now());
+                        if message_timestamps.len() > 1000 {
+                            let cleanup_cutoff = tokio::time::Instant::now()
+                                - (rate_window + Duration::from_secs(10));
+                            message_timestamps.retain(|&timestamp| timestamp >= cleanup_cutoff);
+                        }
+                    }
+                }
+                _ => {
+                    // Handle :Welcome text detection for compatibility
+                    if message_line_owned.contains(IRC_WELCOME_TEXT) {
+                        tracing::info!(
+                            channel.name = %channel_name,
+                            actor.id = %actor_id_for_logging,
+                            "Authenticated successfully (:Welcome). Joining channel..."
+                        );
+                        if actor_tx
+                            .send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
+                                new_status: TwitchChannelConnectionStatus::Connected,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(TwitchError::TwitchConnection(
+                                "Actor channel closed".to_string(),
+                            ));
+                        }
+                        writer
+                            .write_all(
+                                format!("{} #{}\r\n", CMD_JOIN, channel_name.to_lowercase())
+                                    .as_bytes(),
+                            )
+                            .await
+                            .map_err(TwitchError::Io)?;
+                        writer.flush().await.map_err(TwitchError::Io)?;
+                    }
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    channel.name = %channel_name,
+                    actor.id = %actor_id_for_logging,
+                    raw_line = %message_line_owned,
+                    error = %e,
+                    "Failed to parse IRC message. Skipping line."
+                );
+                // Log and skip malformed lines rather than tearing down the connection
             }
         }
     }

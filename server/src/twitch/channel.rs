@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::auth::TokenProvider;
 use super::connection::run_irc_connection_loop;
 use super::error::{Result as TwitchResult, TwitchError};
-use super::irc_parser::IrcMessage;
+use super::irc_parser::{IrcMessage, IrcParseError};
 use super::types::{ChannelTerminationInfo, ParsedTwitchMessage, TwitchChannelConnectionStatus};
 
 #[derive(Debug)]
@@ -243,41 +243,57 @@ impl TwitchChannelActor {
     }
 
     async fn handle_irc_line(&mut self, line: String) {
-        let irc_msg = IrcMessage::parse(&line);
-        if let Some(parsed_twitch_msg) = irc_msg.to_parsed_twitch_message(&self.channel_name) {
-            let mut failed_sends = Vec::new();
+        match IrcMessage::parse(&line) {
+            Ok(irc_msg) => {
+                if let Some(parsed_twitch_msg) =
+                    irc_msg.to_parsed_twitch_message(&self.channel_name)
+                {
+                    let mut failed_sends = Vec::new();
 
-            for (&lobby_id, subscriber_tx) in &self.subscribers {
-                if subscriber_tx.send(parsed_twitch_msg.clone()).await.is_err() {
-                    tracing::warn!(
+                    for (&lobby_id, subscriber_tx) in &self.subscribers {
+                        if subscriber_tx.send(parsed_twitch_msg.clone()).await.is_err() {
+                            tracing::warn!(
+                                channel.name = %self.channel_name,
+                                actor.id = %self.actor_id,
+                                lobby.id = %lobby_id,
+                                "Failed to send message to subscriber lobby (channel full or closed). Marking for removal"
+                            );
+                            failed_sends.push(lobby_id);
+                        }
+                    }
+
+                    for lobby_id in failed_sends {
+                        self.subscribers.remove(&lobby_id);
+                    }
+
+                    if self.subscribers.is_empty() {
+                        tracing::info!(
+                            channel.name = %self.channel_name,
+                            actor.id = %self.actor_id,
+                            "All subscribers disconnected after send failures. Signaling IRC task to shutdown"
+                        );
+                        self.shutdown_irc_connection_task().await;
+                    }
+                } else {
+                    // This means the command was not PRIVMSG or target channel didn't match.
+                    // This is normal for PING, 001, etc.
+                    tracing::trace!(
                         channel.name = %self.channel_name,
                         actor.id = %self.actor_id,
-                        lobby.id = %lobby_id,
-                        "Failed to send message to subscriber lobby (channel full or closed). Marking for removal"
+                        line = %line,
+                        "Received unhandled/non-chat IRC line"
                     );
-                    failed_sends.push(lobby_id);
                 }
             }
-
-            for lobby_id in failed_sends {
-                self.subscribers.remove(&lobby_id);
-            }
-
-            if self.subscribers.is_empty() {
-                tracing::info!(
+            Err(e) => {
+                tracing::warn!(
                     channel.name = %self.channel_name,
                     actor.id = %self.actor_id,
-                    "All subscribers disconnected after send failures. Signaling IRC task to shutdown"
+                    raw_line = %line,
+                    error = %e,
+                    "IRC message parsing failed in channel actor. Line will not be processed for chat."
                 );
-                self.shutdown_irc_connection_task().await;
             }
-        } else {
-            tracing::trace!(
-                channel.name = %self.channel_name,
-                actor.id = %self.actor_id,
-                line = %line,
-                "Received unhandled/non-chat IRC line"
-            );
         }
     }
 
