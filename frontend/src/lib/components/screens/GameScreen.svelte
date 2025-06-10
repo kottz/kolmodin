@@ -21,7 +21,6 @@
 	type GameAdminComponentConstructor = typeof DealNoDealAdminView;
 
 	const activeGameTypeId = $derived(uiStore.state.activeGameTypeIdForUI);
-	const lobbyId = $derived(lobbyStore.state.lobbyId);
 	const subscribedTwitchChannel = $derived(lobbyStore.state.subscribedTwitchChannel);
 	const twitchIrcStatus = $derived(lobbyStore.state.twitchIrcStatus);
 
@@ -44,6 +43,30 @@
 		lobbyStore.userLeaveLobby();
 	}
 
+	function getStatusColor(status: string | null): string {
+		if (!status) return 'bg-red-500';
+
+		const normalizedStatus = status.toLowerCase();
+
+		if (normalizedStatus.includes('connected')) {
+			return 'bg-green-500';
+		} else if (
+			normalizedStatus.includes('connecting') ||
+			normalizedStatus.includes('reconnecting') ||
+			normalizedStatus.includes('authenticating')
+		) {
+			return 'bg-yellow-500';
+		} else if (
+			normalizedStatus.includes('disconnected') ||
+			normalizedStatus.includes('terminated') ||
+			normalizedStatus.includes('error')
+		) {
+			return 'bg-red-500';
+		} else {
+			return 'bg-gray-500';
+		}
+	}
+
 	$effect(() => {
 		if (uiStore.state.currentScreen === 'gameActive' && !activeGameTypeId) {
 			warn(
@@ -55,16 +78,26 @@
 </script>
 
 <div class="flex h-screen flex-col">
-	<header class="border-border bg-background/95 sticky top-0 z-10 border-b p-3 backdrop-blur">
+	<header class="border-border bg-background/95 sticky top-0 z-10 border-b p-4 backdrop-blur">
 		<div class="container mx-auto flex items-center justify-between">
 			<div>
-				<h1 class="text-foreground text-xl font-semibold">
-					Lobby: <span class="text-primary font-mono">{lobbyId || 'N/A'}</span>
-				</h1>
 				{#if subscribedTwitchChannel}
-					<p class="text-muted-foreground text-xs">
-						Twitch: {subscribedTwitchChannel} ({twitchIrcStatus || 'Status Unknown'})
-					</p>
+					<div class="flex items-center gap-3">
+						<div class="flex items-center gap-2">
+							<div class="h-3 w-3 rounded-full {getStatusColor(twitchIrcStatus)}"></div>
+							<h1 class="text-foreground text-lg font-semibold">
+								{subscribedTwitchChannel}
+							</h1>
+						</div>
+						<span class="text-muted-foreground text-sm">
+							{twitchIrcStatus || 'Status Unknown'}
+						</span>
+					</div>
+				{:else}
+					<div class="flex items-center gap-2">
+						<div class="h-3 w-3 rounded-full bg-gray-500"></div>
+						<h1 class="text-muted-foreground text-lg font-semibold">No Twitch Channel</h1>
+					</div>
 				{/if}
 			</div>
 			<!-- Ensure onclick is used for event handling with Svelte 5 components -->

@@ -53,8 +53,7 @@ function createLobbyStore() {
 					status_type: string;
 					details?: string;
 				};
-				let statusText = `Channel: ${statusData.channel_name || state.subscribedTwitchChannel || 'Unknown'}`;
-				statusText += `, Status: ${statusData.status_type}`;
+				let statusText = statusData.status_type;
 				if (statusData.details) statusText += ` (${statusData.details})`;
 				state.twitchIrcStatus = statusText;
 				info(`LobbyStore: Twitch IRC Status Updated - ${statusText}`);
