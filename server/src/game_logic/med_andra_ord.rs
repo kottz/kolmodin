@@ -8,11 +8,11 @@ use std::time::Instant;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
-use crate::game_logic::GameLogic;
 use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
 };
+use crate::game_logic::{EventHandlingResult, GameLogic};
 use crate::twitch::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_MED_ANDRA_ORD: &str = "MedAndraOrd";
@@ -430,7 +430,11 @@ impl GameLogic for MedAndraOrdGameState {
         self.clients.remove(&client_id);
     }
 
-    async fn handle_event(&mut self, _client_id: Uuid, message: GenericClientToServerMessage) {
+    async fn handle_event(
+        &mut self,
+        _client_id: Uuid,
+        message: GenericClientToServerMessage,
+    ) -> EventHandlingResult {
         match message {
             GenericClientToServerMessage::GameSpecificCommand {
                 game_type_id,
@@ -441,7 +445,7 @@ impl GameLogic for MedAndraOrdGameState {
                         game.type_id = %game_type_id,
                         "Wrong game_type_id"
                     );
-                    return;
+                    return EventHandlingResult::Handled;
                 }
 
                 match serde_json::from_value::<AdminCommand>(command_data) {
@@ -478,7 +482,7 @@ impl GameLogic for MedAndraOrdGameState {
                     client.id = %_client_id,
                     "Client explicitly leaving lobby"
                 );
-                self.client_disconnected(_client_id).await;
+                return EventHandlingResult::DisconnectClient;
             }
             GenericClientToServerMessage::GlobalCommand { .. } => {
                 tracing::trace!("Received GlobalCommand (unhandled)");
@@ -487,6 +491,7 @@ impl GameLogic for MedAndraOrdGameState {
                 tracing::warn!("Unrecognized message type");
             }
         }
+        EventHandlingResult::Handled
     }
 
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {

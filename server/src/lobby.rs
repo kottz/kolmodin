@@ -377,7 +377,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
         twitch.channel = %self.twitch_channel_name.as_deref().unwrap_or("N/A"),
         msg_type = %std::any::type_name_of_val(&msg)
     ))]
-    async fn handle_message(&mut self, msg: LobbyActorMessage) {
+    async fn handle_message(&mut self, msg: LobbyActorMessage) -> bool {
         match msg {
             LobbyActorMessage::ProcessEvent {
                 client_id,
@@ -396,9 +396,43 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                             event.type = ?parsed_message,
                             "Processing event from client"
                         );
-                        self.game_engine
+                        let result = self
+                            .game_engine
                             .handle_event(client_id, parsed_message)
                             .await;
+
+                        match result {
+                            crate::game_logic::EventHandlingResult::Handled => {
+                                // Normal event handling, no special action needed
+                            }
+                            crate::game_logic::EventHandlingResult::DisconnectClient => {
+                                // Client requested to leave lobby, trigger disconnection
+                                tracing::info!(
+                                    client.id = %client_id,
+                                    "Game engine requested client disconnection"
+                                );
+                                // Manually trigger client disconnection which will run the empty lobby check
+                                self.game_engine.client_disconnected(client_id).await;
+
+                                // Check if lobby is now empty and should shut down immediately
+                                if self.game_engine.is_empty() {
+                                    tracing::info!(
+                                        "Lobby is now empty after client leave request. Triggering shutdown"
+                                    );
+                                    if let Err(e) = self
+                                        .manager_handle
+                                        .notify_lobby_shutdown(self.lobby_id)
+                                        .await
+                                    {
+                                        tracing::error!(
+                                            error = %e,
+                                            "Failed to notify LobbyManager of shutdown after client leave request"
+                                        );
+                                    }
+                                    return true; // Signal that the lobby should shut down
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -446,6 +480,26 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                     "Client disconnected"
                 );
                 self.game_engine.client_disconnected(client_id).await;
+
+                // Check if lobby is now empty and should shut down immediately
+                // This fixes the issue where empty lobbies would persist indefinitely
+                // because the inactivity timeout only triggers when there are still clients
+                if self.game_engine.is_empty() {
+                    tracing::info!(
+                        "Lobby is now empty after client disconnection. Triggering shutdown"
+                    );
+                    if let Err(e) = self
+                        .manager_handle
+                        .notify_lobby_shutdown(self.lobby_id)
+                        .await
+                    {
+                        tracing::error!(
+                            error = %e,
+                            "Failed to notify LobbyManager of shutdown after last client disconnected"
+                        );
+                    }
+                    return true; // Signal that the lobby should shut down
+                }
             }
             LobbyActorMessage::InternalTwitchMessage(twitch_msg) => {
                 tracing::debug!(
@@ -466,6 +520,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 self.broadcast_twitch_status_update(status).await;
             }
         }
+        false // Default: don't shut down
     }
 
     async fn broadcast_twitch_status_update(&self, status: TwitchChannelConnectionStatus) {
@@ -721,7 +776,11 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                             last_client_ws_activity = Instant::now();
                             tracing::trace!("Client WS activity detected. Resetting inactivity timer");
                         }
-                        actor.handle_message(msg).await;
+                        let should_shutdown = actor.handle_message(msg).await;
+                        if should_shutdown {
+                            tracing::info!("Lobby shutdown requested by message handler");
+                            break;
+                        }
                     }
                     None => {
                         tracing::info!("Lobby actor channel closed. Shutting down");

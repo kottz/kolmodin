@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
-use crate::game_logic::GameLogic;
 use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
 };
+use crate::game_logic::{EventHandlingResult, GameLogic};
 use crate::twitch::ParsedTwitchMessage;
 
 const GAME_TYPE_ID_DND: &str = "DealNoDeal";
@@ -809,7 +809,11 @@ impl GameLogic for DealNoDealGame {
         self.clients.remove(&client_id);
     }
 
-    async fn handle_event(&mut self, _client_id: Uuid, message: GenericClientToServerMessage) {
+    async fn handle_event(
+        &mut self,
+        _client_id: Uuid,
+        message: GenericClientToServerMessage,
+    ) -> EventHandlingResult {
         match message {
             GenericClientToServerMessage::GameSpecificCommand {
                 game_type_id,
@@ -820,7 +824,7 @@ impl GameLogic for DealNoDealGame {
                         game.type_id = %game_type_id,
                         "Received command for wrong game_type_id"
                     );
-                    return;
+                    return EventHandlingResult::Handled;
                 }
                 match serde_json::from_value::<AdminCommand>(command_data) {
                     Ok(cmd) => {
@@ -846,7 +850,7 @@ impl GameLogic for DealNoDealGame {
                     client.id = %_client_id,
                     "Client explicitly leaving lobby"
                 );
-                self.client_disconnected(_client_id).await;
+                return EventHandlingResult::DisconnectClient;
             }
             GenericClientToServerMessage::GlobalCommand { .. } => {
                 tracing::trace!("Received GlobalCommand (unhandled by DND specific logic)");
@@ -855,6 +859,7 @@ impl GameLogic for DealNoDealGame {
                 tracing::warn!("Received unrecognized message type");
             }
         }
+        EventHandlingResult::Handled
     }
 
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {

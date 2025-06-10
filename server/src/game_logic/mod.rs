@@ -5,6 +5,14 @@ use uuid::Uuid;
 
 use crate::twitch::ParsedTwitchMessage;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum EventHandlingResult {
+    /// Event was handled normally, no special actions needed
+    Handled,
+    /// Client should be disconnected (e.g., due to LeaveLobby request)
+    DisconnectClient,
+}
+
 pub mod messages;
 pub use messages::{ClientToServerMessage, ServerToClientMessage};
 
@@ -70,7 +78,7 @@ pub trait GameLogic: Send + Sync + Debug {
         &mut self,
         client_id: Uuid,
         message: ClientToServerMessage,
-    ) -> impl Future<Output = ()> + Send;
+    ) -> impl Future<Output = EventHandlingResult> + Send;
 
     fn handle_twitch_message(
         &mut self,
