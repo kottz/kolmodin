@@ -345,6 +345,7 @@ pub struct LobbyActor<G: GameLogic + Send + 'static> {
     twitch_channel_name: Option<String>,
     twitch_status_receiver: Option<tokio::sync::watch::Receiver<TwitchChannelConnectionStatus>>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
+    twitch_subscribed: bool,
     _twitch_message_task_handle: Option<tokio::task::JoinHandle<()>>,
     _twitch_status_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -365,19 +366,24 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             manager_handle,
             twitch_channel_name,
             twitch_chat_manager_handle,
+            twitch_subscribed: false,
             twitch_status_receiver: None,
             _twitch_message_task_handle: None,
             _twitch_status_task_handle: None,
         }
     }
 
-    #[tracing::instrument(skip(self, msg), fields(
+    #[tracing::instrument(skip(self, msg, self_sender), fields(
         lobby.id = %self.lobby_id,
         game.type = %self.game_engine.game_type_id(),
         twitch.channel = %self.twitch_channel_name.as_deref().unwrap_or("N/A"),
         msg_type = %std::any::type_name_of_val(&msg)
     ))]
-    async fn handle_message(&mut self, msg: LobbyActorMessage) -> bool {
+    async fn handle_message(
+        &mut self,
+        msg: LobbyActorMessage,
+        self_sender: &mpsc::Sender<LobbyActorMessage>,
+    ) -> bool {
         match msg {
             LobbyActorMessage::ProcessEvent {
                 client_id,
@@ -468,6 +474,10 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                     client.id = %client_id,
                     "Client connected"
                 );
+
+                // Ensure Twitch subscription on first client connection
+                self.ensure_twitch_subscription(self_sender).await;
+
                 self.game_engine
                     .client_connected(client_id, client_tx)
                     .await;
@@ -536,17 +546,12 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             ),
             TwitchChannelConnectionStatus::Connected => ("Connected".to_string(), None),
             TwitchChannelConnectionStatus::Reconnecting {
-                reason,
-                failed_attempt,
+                reason: _,
+                failed_attempt: _,
                 retry_in,
             } => (
                 "Reconnecting".to_string(),
-                Some(format!(
-                    "Attempt {} failed: {}. Retry in {}s",
-                    failed_attempt,
-                    reason,
-                    retry_in.as_secs()
-                )),
+                Some(format!("Retry in {}s", retry_in.as_secs())),
             ),
             TwitchChannelConnectionStatus::Disconnected { reason } => {
                 ("Disconnected".to_string(), Some(reason.clone()))
@@ -608,17 +613,12 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                 ),
                 TwitchChannelConnectionStatus::Connected => ("Connected".to_string(), None),
                 TwitchChannelConnectionStatus::Reconnecting {
-                    reason,
-                    failed_attempt,
+                    reason: _,
+                    failed_attempt: _,
                     retry_in,
                 } => (
                     "Reconnecting".to_string(),
-                    Some(format!(
-                        "Attempt {} failed: {}. Retry in {}s",
-                        failed_attempt,
-                        reason,
-                        retry_in.as_secs()
-                    )),
+                    Some(format!("Retry in {}s", retry_in.as_secs())),
                 ),
                 TwitchChannelConnectionStatus::Disconnected { reason } => {
                     ("Disconnected".to_string(), Some(reason.clone()))
@@ -669,6 +669,89 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             }
         }
     }
+
+    async fn ensure_twitch_subscription(&mut self, self_sender: &mpsc::Sender<LobbyActorMessage>) {
+        // Only subscribe if we have a channel name and haven't subscribed yet
+        if let Some(ref channel_name) = self.twitch_channel_name {
+            if !self.twitch_subscribed {
+                let (tx_for_lobby_messages, mut rx_for_lobby_messages) = mpsc::channel(128);
+
+                tracing::info!(
+                    twitch.channel = %channel_name,
+                    "Subscribing to Twitch channel (lazy initialization)"
+                );
+
+                match self
+                    .twitch_chat_manager_handle
+                    .subscribe_to_channel(
+                        channel_name.clone(),
+                        self.lobby_id,
+                        tx_for_lobby_messages,
+                    )
+                    .await
+                {
+                    Ok(status_receiver) => {
+                        tracing::info!(
+                            twitch.channel = %channel_name,
+                            "Successfully subscribed to Twitch channel"
+                        );
+                        self.twitch_status_receiver = Some(status_receiver.clone());
+                        self.twitch_subscribed = true;
+
+                        // Start message listener task
+                        let actor_sender_clone = self_sender.clone();
+                        self._twitch_message_task_handle = Some(tokio::spawn(async move {
+                            tracing::debug!("Twitch message listener task started");
+                            while let Some(twitch_msg) = rx_for_lobby_messages.recv().await {
+                                if actor_sender_clone
+                                    .send(LobbyActorMessage::InternalTwitchMessage(twitch_msg))
+                                    .await
+                                    .is_err()
+                                {
+                                    tracing::warn!(
+                                        "Failed to send internal Twitch message to self"
+                                    );
+                                    break;
+                                }
+                            }
+                            tracing::debug!("Twitch message listener task stopped");
+                        }));
+
+                        // Start status listener task
+                        let mut status_receiver_clone = status_receiver;
+                        let actor_sender_clone = self_sender.clone();
+                        self._twitch_status_task_handle = Some(tokio::spawn(async move {
+                            tracing::debug!("Twitch status listener task started");
+                            loop {
+                                tokio::select! {
+                                    changed_result = status_receiver_clone.changed() => {
+                                        if changed_result.is_err() {
+                                            tracing::info!("Twitch status channel closed");
+                                            break;
+                                        }
+                                        let status = status_receiver_clone.borrow_and_update().clone();
+                                         if actor_sender_clone.send(LobbyActorMessage::InternalTwitchStatusUpdate(status)).await.is_err() {
+                                            tracing::warn!("Failed to send internal Twitch status to self");
+                                            break;
+                                        }
+                                    }
+                                    else => break,
+                                }
+                            }
+                            tracing::debug!("Twitch status listener task stopped");
+                        }));
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            twitch.channel = %channel_name,
+                            error = ?e,
+                            "Failed to subscribe to Twitch channel"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[tracing::instrument(skip(actor, self_sender), fields(
@@ -682,87 +765,7 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
 ) {
     tracing::info!("Lobby actor started");
 
-    let mut twitch_message_rx_option: Option<mpsc::Receiver<ParsedTwitchMessage>> = None;
-    let mut twitch_status_rx_option: Option<
-        tokio::sync::watch::Receiver<TwitchChannelConnectionStatus>,
-    > = None;
-
-    if let Some(ref channel_name) = actor.twitch_channel_name {
-        let (tx_for_lobby_messages, rx_for_lobby_messages) = mpsc::channel(128);
-        twitch_message_rx_option = Some(rx_for_lobby_messages);
-
-        tracing::info!(
-            twitch.channel = %channel_name,
-            "Subscribing to Twitch channel"
-        );
-
-        match actor
-            .twitch_chat_manager_handle
-            .subscribe_to_channel(channel_name.clone(), actor.lobby_id, tx_for_lobby_messages)
-            .await
-        {
-            Ok(status_receiver) => {
-                tracing::info!(
-                    twitch.channel = %channel_name,
-                    "Successfully subscribed to Twitch channel"
-                );
-                actor.twitch_status_receiver = Some(status_receiver.clone());
-                twitch_status_rx_option = Some(status_receiver);
-            }
-            Err(e) => {
-                tracing::error!(
-                    twitch.channel = %channel_name,
-                    error = ?e,
-                    "Failed to subscribe to Twitch channel"
-                );
-                twitch_message_rx_option = None;
-            }
-        }
-    }
-
-    if let Some(mut receiver) = twitch_message_rx_option {
-        let actor_sender_clone = self_sender.clone();
-        let _lobby_id_clone = actor.lobby_id;
-        actor._twitch_message_task_handle = Some(tokio::spawn(async move {
-            tracing::debug!("Twitch message listener task started");
-            while let Some(twitch_msg) = receiver.recv().await {
-                if actor_sender_clone
-                    .send(LobbyActorMessage::InternalTwitchMessage(twitch_msg))
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("Failed to send internal Twitch message to self");
-                    break;
-                }
-            }
-            tracing::debug!("Twitch message listener task stopped");
-        }));
-    }
-
-    if let Some(mut status_receiver) = twitch_status_rx_option {
-        let actor_sender_clone = self_sender.clone();
-        let _lobby_id_clone = actor.lobby_id;
-        actor._twitch_status_task_handle = Some(tokio::spawn(async move {
-            tracing::debug!("Twitch status listener task started");
-            loop {
-                tokio::select! {
-                    changed_result = status_receiver.changed() => {
-                        if changed_result.is_err() {
-                            tracing::info!("Twitch status channel closed");
-                            break;
-                        }
-                        let status = status_receiver.borrow_and_update().clone();
-                         if actor_sender_clone.send(LobbyActorMessage::InternalTwitchStatusUpdate(status)).await.is_err() {
-                            tracing::warn!("Failed to send internal Twitch status to self");
-                            break;
-                        }
-                    }
-                    else => break,
-                }
-            }
-            tracing::debug!("Twitch status listener task stopped");
-        }));
-    }
+    // Twitch subscription will now be handled lazily when first client connects
 
     let client_ws_inactivity_timeout_duration = StdDuration::from_secs(60 * 60);
     let mut last_client_ws_activity = Instant::now();
@@ -776,7 +779,7 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                             last_client_ws_activity = Instant::now();
                             tracing::trace!("Client WS activity detected. Resetting inactivity timer");
                         }
-                        let should_shutdown = actor.handle_message(msg).await;
+                        let should_shutdown = actor.handle_message(msg, &self_sender).await;
                         if should_shutdown {
                             tracing::info!("Lobby shutdown requested by message handler");
                             break;
@@ -804,20 +807,28 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
 
     tracing::info!("Lobby actor stopping");
 
+    // Only unsubscribe if we actually subscribed to a Twitch channel
     if let Some(ref channel_name) = actor.twitch_channel_name {
-        tracing::info!(
-            twitch.channel = %channel_name,
-            "Unsubscribing from Twitch channel"
-        );
-        if let Err(e) = actor
-            .twitch_chat_manager_handle
-            .unsubscribe_from_channel(channel_name.clone(), actor.lobby_id)
-            .await
-        {
-            tracing::error!(
+        if actor.twitch_subscribed {
+            tracing::info!(
                 twitch.channel = %channel_name,
-                error = ?e,
-                "Failed to unsubscribe from Twitch channel"
+                "Unsubscribing from Twitch channel"
+            );
+            if let Err(e) = actor
+                .twitch_chat_manager_handle
+                .unsubscribe_from_channel(channel_name.clone(), actor.lobby_id)
+                .await
+            {
+                tracing::error!(
+                    twitch.channel = %channel_name,
+                    error = ?e,
+                    "Failed to unsubscribe from Twitch channel"
+                );
+            }
+        } else {
+            tracing::debug!(
+                twitch.channel = %channel_name,
+                "Skipping unsubscribe - never subscribed to Twitch channel"
             );
         }
     }
