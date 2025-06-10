@@ -17,6 +17,7 @@ pub async fn run_irc_connection_loop(
     token_provider: TokenProvider,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
+    let irc_server_url = token_provider.get_irc_server_url();
     tracing::info!(
         channel.name = %channel_name,
         actor.id = %actor_id_for_logging,
@@ -64,6 +65,7 @@ pub async fn run_irc_connection_loop(
                 &token_provider,
                 &actor_tx,
                 reconnect_attempts,
+                irc_server_url,
             ) => {
                 let (reason_for_disconnect, delay_seconds, should_terminate_loop) =
                     process_connection_result(
@@ -263,6 +265,7 @@ async fn connect_and_listen_irc_single_attempt_adapted(
     token_provider: &TokenProvider,
     actor_tx: &mpsc::Sender<TwitchChannelActorMessage>,
     attempt_number: u32,
+    irc_server_url: &str,
 ) -> TwitchResult<()> {
     let oauth_token_str = token_provider.get_token().await;
 
@@ -270,15 +273,13 @@ async fn connect_and_listen_irc_single_attempt_adapted(
         channel.name = %channel_name,
         actor.id = %actor_id_for_logging,
         attempt = attempt_number,
-        "Connecting to Twitch IRC as kolmodin_bot..."
+        irc_server = %irc_server_url,
+        "Connecting to IRC server as kolmodin_bot..."
     );
 
     let connect_timeout = Duration::from_secs(15);
-    let stream_result = tokio::time::timeout(
-        connect_timeout,
-        TcpStream::connect("irc.chat.twitch.tv:6667"),
-    )
-    .await;
+    let stream_result =
+        tokio::time::timeout(connect_timeout, TcpStream::connect(irc_server_url)).await;
 
     let stream = match stream_result {
         Ok(Ok(stream)) => stream,

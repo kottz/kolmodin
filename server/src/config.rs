@@ -25,6 +25,12 @@ impl std::fmt::Debug for ServerConfig {
 pub struct TwitchConfig {
     pub client_id: String,
     pub client_secret: String,
+    #[serde(default = "default_irc_server_url")]
+    pub irc_server_url: String,
+}
+
+fn default_irc_server_url() -> String {
+    "irc.chat.twitch.tv:6667".to_string()
 }
 
 impl std::fmt::Debug for TwitchConfig {
@@ -32,6 +38,7 @@ impl std::fmt::Debug for TwitchConfig {
         f.debug_struct("TwitchConfig")
             .field("client_id", &self.client_id)
             .field("client_secret", &"***REDACTED***")
+            .field("irc_server_url", &self.irc_server_url)
             .finish()
     }
 }

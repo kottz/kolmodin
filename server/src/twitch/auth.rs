@@ -222,4 +222,8 @@ impl TokenProvider {
             }
         });
     }
+
+    pub fn get_irc_server_url(&self) -> &str {
+        &self.twitch_config.irc_server_url
+    }
 }
