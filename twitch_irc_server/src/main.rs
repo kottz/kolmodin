@@ -1,43 +1,237 @@
 // src/main.rs
 
-use chrono::Utc;
+use chrono::Utc; // Removed DateTime
+use std::collections::BTreeMap; // For ordered tags
 use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock; // Use Tokio's Arc and RwLock
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio::time::{Duration, interval};
 use uuid::Uuid;
 
+// --- Server Configuration ---
 const SPOOF_HOST: &str = "127.0.0.1";
 const SPOOF_PORT: u16 = 6667;
-const SERVER_NAME: &str = "tmi.twitch.tv"; // Twitch's actual server name used in messages
+const SERVER_NAME: &str = "tmi.twitch.tv"; // Twitch's actual server name
+const SERVER_VERSION: &str = "spoof-0.2"; // Our spoof server version
 
-// --- Simulated sender's (e.g., Kotteswe) details for PRIVMSGs ---
-const SIMULATED_SENDER_LOGIN_NAME: &str = "kotteswe"; // Lowercase, for IRC prefix
-const SIMULATED_SENDER_DISPLAY_NAME: &str = "Kotteswe"; // Display name in tags
-const SIMULATED_SENDER_USER_ID: &str = "23654840"; // User ID from logs
-const SIMULATED_SENDER_COLOR: &str = "#8A2BE2";
-const SIMULATED_SENDER_BADGES: &str = "broadcaster/1"; // As per log
-const SIMULATED_SENDER_BADGE_INFO: &str = ""; // As per log, was empty.
+// --- Simulated User Details (for periodic messages or testing) ---
+mod simulated_users {
+    pub struct UserDetails {
+        pub login_name: &'static str, // Lowercase, for IRC prefix and user lookup
+        pub display_name: &'static str, // Display name in tags
+        pub user_id: &'static str,    // Twitch User ID
+        pub color: &'static str,      // Hex color string (e.g., "#FF00FF")
+        pub badges: &'static str,     // Comma-separated (e.g., "broadcaster/1,subscriber/0")
+        pub badge_info: &'static str, // Comma-separated (e.g., "subscriber/6")
+    }
 
-// Room ID for ROOMSTATE and PRIVMSG tags. Logs show this matches the broadcaster's user ID for their channel.
-const CHANNEL_ROOM_ID: &str = SIMULATED_SENDER_USER_ID;
+    pub const KOTTESWE: UserDetails = UserDetails {
+        login_name: "kotteswe",
+        display_name: "Kotteswe",
+        user_id: "23654840", // From logs
+        color: "#8A2BE2",    // From logs
+        badges: "broadcaster/1",
+        badge_info: "", // From logs (was empty)
+    };
 
-#[derive(Debug, Clone, PartialEq)]
-enum ClientHandlerState {
-    Connected,        // Initial state after TCP connection
-    CapabilitiesSent, // After server sends CAP ACK
-    Authenticated,    // After client sends NICK and PASS (implicitly)
-    Joined,           // After client JOINs a channel
+    #[allow(dead_code)] // Keep for potential future use
+    pub const ANOTHER_USER: UserDetails = UserDetails {
+        login_name: "another_user",
+        display_name: "AnotherUser",
+        user_id: "98765432",
+        color: "#00FF00",
+        badges: "subscriber/3,premium/1",
+        badge_info: "subscriber/3",
+    };
 }
 
-// Holds information about the connected client
+// --- IRC Message Structures & Utilities ---
+mod irc {
+    use super::*; // To access Utc, Uuid, BTreeMap etc.
+
+    // Common IRC Tag Keys (subset)
+    pub const TAG_BADGE_INFO: &str = "badge-info";
+    pub const TAG_BADGES: &str = "badges";
+    pub const TAG_COLOR: &str = "color";
+    pub const TAG_DISPLAY_NAME: &str = "display-name";
+    pub const TAG_EMOTES: &str = "emotes";
+    pub const TAG_FIRST_MSG: &str = "first-msg";
+    pub const TAG_FLAGS: &str = "flags";
+    pub const TAG_ID: &str = "id"; // Message ID
+    pub const TAG_MOD: &str = "mod";
+    pub const TAG_RETURNING_CHATTER: &str = "returning-chatter";
+    pub const TAG_ROOM_ID: &str = "room-id";
+    pub const TAG_SUBSCRIBER: &str = "subscriber";
+    pub const TAG_TMI_SENT_TS: &str = "tmi-sent-ts";
+    pub const TAG_TURBO: &str = "turbo";
+    pub const TAG_USER_ID: &str = "user-id";
+    pub const TAG_USER_TYPE: &str = "user-type"; // e.g., "mod", "admin", "global_mod", "" (normal)
+
+    // Common IRC Commands
+    pub const CMD_CAP: &str = "CAP";
+    pub const CMD_JOIN: &str = "JOIN";
+    pub const CMD_NICK: &str = "NICK";
+    pub const CMD_PASS: &str = "PASS";
+    pub const CMD_PING: &str = "PING";
+    pub const CMD_PONG: &str = "PONG";
+    pub const CMD_PRIVMSG: &str = "PRIVMSG";
+    pub const CMD_QUIT: &str = "QUIT";
+    pub const CMD_ROOMSTATE: &str = "ROOMSTATE";
+
+    // Common IRC Numerics (Replies)
+    pub const RPL_WELCOME: &str = "001";
+    pub const RPL_YOURHOST: &str = "002";
+    pub const RPL_CREATED: &str = "003";
+    pub const RPL_MYINFO: &str = "004";
+    pub const RPL_NAMREPLY: &str = "353";
+    pub const RPL_ENDOFNAMES: &str = "366";
+    pub const RPL_MOTDSTART: &str = "375";
+    pub const RPL_MOTD: &str = "372";
+    pub const RPL_ENDOFMOTD: &str = "376";
+
+    #[derive(Debug, Clone)]
+    pub struct IrcMessage {
+        pub tags: Option<BTreeMap<String, String>>, // BTreeMap for ordered tags (good for testing/consistency)
+        pub prefix: Option<String>,
+        pub command: String,
+        pub params: Vec<String>,
+    }
+
+    impl fmt::Display for IrcMessage {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if let Some(tags) = &self.tags {
+                if !tags.is_empty() {
+                    write!(f, "@")?;
+                    for (i, (k, v)) in tags.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ";")?;
+                        }
+                        // IRC tag values need escaping for ';' ' ' '\r' '\n' '\'
+                        // For simplicity here, we'll assume values are pre-sanitized or simple.
+                        // Proper escaping: v.replace('\\', "\\\\").replace(';', "\\:").replace(' ', "\\s").replace('\r', "\\r").replace('\n', "\\n")
+                        write!(f, "{}={}", k, v)?;
+                    }
+                    write!(f, " ")?;
+                }
+            }
+            if let Some(prefix) = &self.prefix {
+                write!(f, ":{} ", prefix)?;
+            }
+            write!(f, "{}", self.command)?;
+            for (i, param) in self.params.iter().enumerate() {
+                if i == self.params.len() - 1 && (param.contains(' ') || param.starts_with(':')) {
+                    write!(f, " :{}", param)?;
+                } else {
+                    write!(f, " {}", param)?;
+                }
+            }
+            write!(f, "\r\n")
+        }
+    }
+
+    impl IrcMessage {
+        pub fn new(command: impl Into<String>, params: Vec<impl Into<String>>) -> Self {
+            IrcMessage {
+                tags: None,
+                prefix: Some(SERVER_NAME.to_string()), // Default prefix for server messages
+                command: command.into(),
+                params: params.into_iter().map(|s| s.into()).collect(),
+            }
+        }
+
+        #[allow(dead_code)] // Might be useful later
+        pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
+            self.prefix = Some(prefix.into());
+            self
+        }
+
+        #[allow(dead_code)] // Might be useful later
+        pub fn without_prefix(mut self) -> Self {
+            self.prefix = None;
+            self
+        }
+
+        pub fn add_tag(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+            let tags = self.tags.get_or_insert_with(BTreeMap::new);
+            tags.insert(key.into(), value.into());
+            self
+        }
+
+        pub fn from_user_privmsg(
+            sender: &simulated_users::UserDetails,
+            channel: &str, // Just channel name, no #
+            text: &str,
+            room_id: &str,
+        ) -> Self {
+            let message_id = Uuid::new_v4().to_string();
+            let timestamp = Utc::now().timestamp_millis().to_string();
+
+            let mut msg = IrcMessage {
+                tags: Some(BTreeMap::new()),
+                prefix: Some(format!(
+                    "{}!{}@{}.{}",
+                    sender.login_name, sender.login_name, sender.login_name, SERVER_NAME
+                )),
+                command: CMD_PRIVMSG.to_string(),
+                params: vec![format!("#{}", channel), text.to_string()],
+            };
+
+            let tags = msg.tags.as_mut().unwrap();
+            if !sender.badge_info.is_empty() {
+                tags.insert(TAG_BADGE_INFO.to_string(), sender.badge_info.to_string());
+            }
+            if !sender.badges.is_empty() {
+                tags.insert(TAG_BADGES.to_string(), sender.badges.to_string());
+            }
+            tags.insert(TAG_COLOR.to_string(), sender.color.to_string());
+            tags.insert(
+                TAG_DISPLAY_NAME.to_string(),
+                sender.display_name.to_string(),
+            );
+            tags.insert(TAG_EMOTES.to_string(), "".to_string()); // Assume no emotes for simplicity
+            tags.insert(TAG_ID.to_string(), message_id);
+            tags.insert(TAG_MOD.to_string(), "0".to_string()); // Assuming not mod for now
+            tags.insert(TAG_ROOM_ID.to_string(), room_id.to_string());
+            tags.insert(
+                TAG_SUBSCRIBER.to_string(),
+                if sender.badges.contains("subscriber") {
+                    "1"
+                } else {
+                    "0"
+                }
+                .to_string(),
+            );
+            tags.insert(TAG_TMI_SENT_TS.to_string(), timestamp);
+            tags.insert(TAG_TURBO.to_string(), "0".to_string());
+            tags.insert(TAG_USER_ID.to_string(), sender.user_id.to_string());
+            tags.insert(TAG_USER_TYPE.to_string(), "".to_string()); // normal user
+            // Optional: first-msg, flags, returning-chatter
+            tags.insert(TAG_FIRST_MSG.to_string(), "0".to_string());
+            tags.insert(TAG_FLAGS.to_string(), "".to_string());
+            tags.insert(TAG_RETURNING_CHATTER.to_string(), "0".to_string());
+
+            msg
+        }
+    }
+}
+
+// --- Client Session State & Handling ---
+#[derive(Debug, Clone, PartialEq)]
+enum ClientHandlerState {
+    Connected,
+    CapabilitiesSent,
+    Authenticated,
+    Joined,
+}
+
 struct ClientSession {
-    nick: Option<String>,
-    channel: Option<String>,
+    nick: Option<String>,    // The NICK client chose (e.g., justinfanXXXXX)
+    channel: Option<String>, // The channel name (without #) client joined
     state: ClientHandlerState,
+    // Future: Could store client's requested capabilities, IP, etc.
 }
 
 impl ClientSession {
@@ -61,39 +255,39 @@ async fn handle_client(
     let mut buf_reader = BufReader::new(reader);
     let mut line_buffer = String::new();
 
-    // Use tokio::sync::RwLock
     let client_session_arc = Arc::new(RwLock::new(ClientSession::new()));
-    let shutdown_signal = Arc::new(Notify::new()); // Used to signal all tasks for this client to stop
+    let shutdown_signal = Arc::new(Notify::new());
 
-    // MPSC channel to send formatted IRC messages to the writer task
-    let (msg_to_send_tx, mut msg_to_send_rx) = mpsc::channel::<String>(32);
+    let (msg_to_send_tx, mut msg_to_send_rx) = mpsc::channel::<irc::IrcMessage>(32);
 
-    // --- Writer Task ---
-    // This task is solely responsible for writing to the TCP stream.
+    // Writer Task
     let writer_task_shutdown_signal = Arc::clone(&shutdown_signal);
     let writer_task_client_addr = client_addr_str.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                Some(message) = msg_to_send_rx.recv() => {
-                    if writer_half.write_all(message.as_bytes()).await.is_err() {
-                        eprintln!("[{}] Writer task: Error writing to client. Closing connection.", writer_task_client_addr);
-                        writer_task_shutdown_signal.notify_waiters(); // Signal other tasks
+                Some(irc_msg) = msg_to_send_rx.recv() => {
+                    let raw_msg_str = irc_msg.to_string();
+                    // Log outgoing server message before sending
+                    println!("[{}] S: {}", writer_task_client_addr, raw_msg_str.trim_end());
+                    if writer_half.write_all(raw_msg_str.as_bytes()).await.is_err() {
+                        eprintln!("[{}] Writer task: Error writing. Shutting down client handler.", writer_task_client_addr);
+                        writer_task_shutdown_signal.notify_waiters();
                         break;
                     }
                     if writer_half.flush().await.is_err() {
-                        eprintln!("[{}] Writer task: Error flushing to client. Closing connection.", writer_task_client_addr);
-                        writer_task_shutdown_signal.notify_waiters(); // Signal other tasks
+                        eprintln!("[{}] Writer task: Error flushing. Shutting down client handler.", writer_task_client_addr);
+                        writer_task_shutdown_signal.notify_waiters();
                         break;
                     }
                 }
                 _ = writer_task_shutdown_signal.notified() => {
-                    println!("[{}] Writer task: Shutdown signal received. Exiting.", writer_task_client_addr);
+                    println!("[{}] Writer task: Shutdown signal received.", writer_task_client_addr);
                     break;
                 }
-                else => { // msg_to_send_rx channel closed
-                    println!("[{}] Writer task: Message channel closed. Exiting.", writer_task_client_addr);
-                    writer_task_shutdown_signal.notify_waiters(); // Ensure others know if this exits unexpectedly
+                else => {
+                    println!("[{}] Writer task: Message channel closed.", writer_task_client_addr);
+                    writer_task_shutdown_signal.notify_waiters();
                     break;
                 }
             }
@@ -101,7 +295,7 @@ async fn handle_client(
         println!("[{}] Writer task finished.", writer_task_client_addr);
     });
 
-    // --- Periodic PRIVMSG Sender Task ---
+    // Periodic PRIVMSG Sender Task
     let periodic_sender_tx = msg_to_send_tx.clone();
     let periodic_session_arc = Arc::clone(&client_session_arc);
     let periodic_shutdown_signal = Arc::clone(&shutdown_signal);
@@ -113,262 +307,206 @@ async fn handle_client(
         loop {
             tokio::select! {
                 _ = tick_interval.tick() => {
-                    let (current_state, joined_channel_opt) = {
-                        // Read necessary info from shared session state
-                        let session_guard = periodic_session_arc.read().await; // Use .await
-                        (session_guard.state.clone(), session_guard.channel.clone())
-                    };
-
-                    if current_state == ClientHandlerState::Joined {
-                        if let Some(joined_channel) = joined_channel_opt {
+                    let session_guard = periodic_session_arc.read().await;
+                    if session_guard.state == ClientHandlerState::Joined {
+                        if let Some(joined_channel) = &session_guard.channel {
                             message_counter += 1;
-                            let message_text = format!("Spoofed message #{} from {}!", message_counter, SIMULATED_SENDER_DISPLAY_NAME);
-                            let msg_uuid = Uuid::new_v4().to_string();
-                            let tmi_sent_ts = Utc::now().timestamp_millis().to_string();
+                            let text = format!("Periodic spoofed message #{} from {}!", message_counter, simulated_users::KOTTESWE.display_name);
+                            // For room_id, we'll assume the channel name corresponds to a user (Kotteswe in this case)
+                            // and use that user's ID as the room_id, which is common on Twitch.
+                            let room_id_for_channel = simulated_users::KOTTESWE.user_id;
 
-                            let tags = format!(
-                                "badge-info={};badges={};color={};display-name={};emotes=;first-msg=0;flags=;id={};mod=0;returning-chatter=0;room-id={};subscriber=0;tmi-sent-ts={};turbo=0;user-id={};user-type=",
-                                SIMULATED_SENDER_BADGE_INFO,
-                                SIMULATED_SENDER_BADGES,
-                                SIMULATED_SENDER_COLOR,
-                                SIMULATED_SENDER_DISPLAY_NAME,
-                                msg_uuid,
-                                CHANNEL_ROOM_ID, // This is SIMULATED_SENDER_USER_ID
-                                tmi_sent_ts,
-                                SIMULATED_SENDER_USER_ID
+                            let privmsg = irc::IrcMessage::from_user_privmsg(
+                                &simulated_users::KOTTESWE,
+                                joined_channel,
+                                &text,
+                                room_id_for_channel,
                             );
-
-                            let privmsg_line = format!(
-                                "@{tags} :{login_name}!{login_name}@{login_name}.{server_name} PRIVMSG #{channel} :{text}\r\n",
-                                tags = tags,
-                                login_name = SIMULATED_SENDER_LOGIN_NAME,
-                                server_name = SERVER_NAME,
-                                channel = joined_channel,
-                                text = message_text
-                            );
-                            // Log locally before sending to writer task
-                            println!("[{}] S (periodic): {}", periodic_client_addr, privmsg_line.trim_end());
-                            if periodic_sender_tx.send(privmsg_line).await.is_err() {
-                                println!("[{}] Periodic sender: Failed to send message to writer task (channel closed). Exiting.", periodic_client_addr);
-                                periodic_shutdown_signal.notify_waiters(); // Signal main handler
+                            if periodic_sender_tx.send(privmsg).await.is_err() {
+                                println!("[{}] Periodic sender: Writer channel closed. Shutting down.", periodic_client_addr);
+                                periodic_shutdown_signal.notify_waiters();
                                 break;
                             }
                         }
                     }
                 }
                 _ = periodic_shutdown_signal.notified() => {
-                    println!("[{}] Periodic sender: Shutdown signal received. Exiting.", periodic_client_addr);
-                    return; // Exit task
+                    println!("[{}] Periodic sender: Shutdown signal received.", periodic_client_addr);
+                    break;
                 }
             }
         }
         println!("[{}] Periodic sender task finished.", periodic_client_addr);
     });
 
-    // --- Main Client Handling Loop (Reading incoming messages) ---
+    // Main Client Handling Loop
     loop {
         line_buffer.clear();
         tokio::select! {
             result = buf_reader.read_line(&mut line_buffer) => {
                 match result {
-                    Ok(0) => { // EOF
-                        println!("[{}] Client disconnected (EOF)", client_addr_str);
-                        break; // Exit main loop for this client
+                    Ok(0) => {
+                        println!("[{}] Client disconnected (EOF).", client_addr_str);
+                        break;
                     }
-                    Ok(_) => { // Bytes read
-                        let incoming_msg_orig = line_buffer.trim_end_matches(['\r', '\n']).to_string();
-                        if incoming_msg_orig.is_empty() {
-                            continue;
-                        }
-                        println!("[{}] C: {}", client_addr_str, incoming_msg_orig);
+                    Ok(_) => {
+                        let incoming_msg_raw = line_buffer.trim_end_matches(['\r', '\n']).to_string();
+                        if incoming_msg_raw.is_empty() { continue; }
+                        println!("[{}] C: {}", client_addr_str, incoming_msg_raw);
 
-                        let parts: Vec<&str> = incoming_msg_orig.split_whitespace().collect();
-                        if parts.is_empty() {
-                            continue;
-                        }
-                        let command = parts[0].to_uppercase();
+                        let parts: Vec<&str> = incoming_msg_raw.split_whitespace().collect();
+                        if parts.is_empty() { continue; }
+                        let command_str = parts[0].to_uppercase();
 
-                        // Acquire write lock using .await
-                        let mut session_guard = client_session_arc.write().await;
+                        let mut session = client_session_arc.write().await;
 
-                        match command.as_str() {
-                            "CAP" => {
-                                if parts.len() >= 2 && parts[1].to_uppercase() == "REQ" {
-                                    let caps_requested = if parts.len() > 2 && parts[2].starts_with(':') {
-                                        parts[2..].join(" ").trim_start_matches(':').to_string()
-                                    } else if parts.len() > 2 {
-                                        parts[2..].join(" ")
-                                    } else {
-                                        // Default to what Kolmodin client requests
-                                        "twitch.tv/membership twitch.tv/tags twitch.tv/commands".to_string()
-                                    };
-                                    let response = format!(":{SERVER_NAME} CAP * ACK :{caps_requested}\r\n");
-                                    println!("[{}] S: {}", client_addr_str, response.trim_end());
-                                    if msg_to_send_tx.send(response).await.is_err() { break; } // Guard held across await is fine with tokio::sync::RwLock
-                                    session_guard.state = ClientHandlerState::CapabilitiesSent;
+                        match command_str.as_str() {
+                            irc::CMD_CAP => {
+                                if parts.len() >= 3 && parts[1].to_uppercase() == "REQ" {
+                                    let caps_requested = parts[2..].join(" ").trim_start_matches(':').to_string();
+                                    let ack_msg = irc::IrcMessage::new(irc::CMD_CAP, vec!["*", "ACK", &format!(":{}", caps_requested)]);
+                                    if msg_to_send_tx.send(ack_msg).await.is_err() { break; }
+                                    session.state = ClientHandlerState::CapabilitiesSent;
                                 }
                             }
-                            "PASS" => {
-                                // Implicitly handled, usually comes before NICK.
-                                // State progression to Authenticated happens upon receiving NICK.
-                            }
-                            "NICK" => {
-                                if parts.len() > 1 {
+                            irc::CMD_PASS => { /* Implicitly handled by NICK state transition */ }
+                            irc::CMD_NICK => {
+                                if parts.len() > 1 && session.state == ClientHandlerState::CapabilitiesSent {
                                     let nick = parts[1].to_string();
-                                    session_guard.nick = Some(nick.clone());
+                                    session.nick = Some(nick.clone());
 
                                     let welcome_msgs = vec![
-                                        format!(":{SERVER_NAME} 001 {nick} :Welcome, GLHF!\r\n"),
-                                        format!(":{SERVER_NAME} 002 {nick} :Your host is {SERVER_NAME}, running version spoof-0.1\r\n"),
-                                        format!(":{SERVER_NAME} 003 {nick} :This server was created on a mystical date\r\n"),
-                                        format!(":{SERVER_NAME} 004 {nick} {SERVER_NAME} spoof-0.1 aoit\r\n"),
-                                        format!(":{SERVER_NAME} 375 {nick} :- {SERVER_NAME} Message of the Day -\r\n"),
-                                        format!(":{SERVER_NAME} 372 {nick} :You are in a maze of twisty passages, all alike.\r\n"),
-                                        format!(":{SERVER_NAME} 376 {nick} :>\r\n"),
+                                        irc::IrcMessage::new(irc::RPL_WELCOME, vec![&nick, ":Welcome, GLHF!"]),
+                                        irc::IrcMessage::new(irc::RPL_YOURHOST, vec![&nick, &format!(":Your host is {}, running version {}", SERVER_NAME, SERVER_VERSION)]),
+                                        irc::IrcMessage::new(irc::RPL_CREATED, vec![&nick, ":This server was created on a mystical date"]),
+                                        irc::IrcMessage::new(irc::RPL_MYINFO, vec![&nick, SERVER_NAME, SERVER_VERSION, "aoitsnfk", ""]), // Modes
+                                        irc::IrcMessage::new(irc::RPL_MOTDSTART, vec![&nick, &format!(":- {} Message of the Day -", SERVER_NAME)]),
+                                        irc::IrcMessage::new(irc::RPL_MOTD, vec![&nick, ":You are in a maze of twisty passages, all alike."]),
+                                        irc::IrcMessage::new(irc::RPL_ENDOFMOTD, vec![&nick, ":>"]), // Twitch uses ">"
                                     ];
                                     for msg in welcome_msgs {
-                                        println!("[{}] S: {}", client_addr_str, msg.trim_end());
                                         if msg_to_send_tx.send(msg).await.is_err() { break; }
                                     }
-                                    if session_guard.state == ClientHandlerState::CapabilitiesSent { // Ensure CAP ACK was sent
-                                        session_guard.state = ClientHandlerState::Authenticated;
-                                    }
+                                    session.state = ClientHandlerState::Authenticated;
                                 }
                             }
-                            "JOIN" => {
-                                if session_guard.state == ClientHandlerState::Authenticated && parts.len() > 1 {
-                                    let channel_to_join_raw = parts[1];
-                                    let channel_name = channel_to_join_raw.trim_start_matches('#').to_string();
-                                    session_guard.channel = Some(channel_name.clone());
+                            irc::CMD_JOIN => {
+                                if session.state == ClientHandlerState::Authenticated && parts.len() > 1 {
+                                    let channel_name_raw = parts[1];
+                                    let channel_name = channel_name_raw.trim_start_matches('#').to_string();
+                                    session.channel = Some(channel_name.clone());
 
-                                    let client_nick = session_guard.nick.as_ref().cloned().unwrap_or_else(|| "unknown_client".to_string());
+                                    // Ensure client_nick_str has a lifetime that outlives users_in_chat
+                                    let client_nick_str = session.nick.as_ref().cloned().unwrap_or_else(|| "unknown_client".to_string());
 
-                                    // 1. Echo client's own JOIN (from client's perspective)
-                                    let join_echo = format!(
-                                        ":{nick}!{nick}@{nick}.{server_name} JOIN #{channel}\r\n",
-                                        nick = client_nick, // This should be the client's NICK from session_guard.nick
-                                        server_name = SERVER_NAME, // e.g. justinfan123.tmi.twitch.tv
-                                        channel = channel_name
-                                    );
-                                    println!("[{}] S: {}", client_addr_str, join_echo.trim_end());
+                                    // 1. Client's own JOIN echo
+                                    let join_echo = irc::IrcMessage {
+                                        tags: None,
+                                        prefix: Some(format!("{}!{}@{}.{}", client_nick_str, client_nick_str, client_nick_str, SERVER_NAME)),
+                                        command: irc::CMD_JOIN.to_string(),
+                                        params: vec![format!("#{}", channel_name)],
+                                    };
                                     if msg_to_send_tx.send(join_echo).await.is_err() { break; }
 
-                                    // 2. Send ROOMSTATE
-                                    let roomstate_tags = format!(
-                                        "emote-only=0;followers-only=-1;r9k=0;room-id={};slow=0;subs-only=0",
-                                        CHANNEL_ROOM_ID
-                                    );
-                                    let roomstate_msg = format!(
-                                        "@{tags} :{SERVER_NAME} ROOMSTATE #{channel}\r\n",
-                                        tags = roomstate_tags,
-                                        channel = channel_name
-                                    );
-                                    println!("[{}] S: {}", client_addr_str, roomstate_msg.trim_end());
+                                    // 2. ROOMSTATE
+                                    let room_id_for_channel = simulated_users::KOTTESWE.user_id;
+                                    let roomstate_msg = irc::IrcMessage::new(irc::CMD_ROOMSTATE, vec![format!("#{}", channel_name)])
+                                        .add_tag("emote-only", "0")
+                                        .add_tag("followers-only", "-1")
+                                        .add_tag("r9k", "0")
+                                        .add_tag(irc::TAG_ROOM_ID, room_id_for_channel)
+                                        .add_tag("slow", "0")
+                                        .add_tag("subs-only", "0");
                                     if msg_to_send_tx.send(roomstate_msg).await.is_err() { break; }
 
-                                    // 3. Send NAMES list (RPL_NAMREPLY) - one per user as per logs
-                                    // Prefix for 353/366 is :<client_nick>.<server_name> from logs
-                                    // The logs show :justinfan70698.tmi.twitch.tv 353 justinfan70698 = #kotteswe :kotteswe
-                                    // So the prefix is indeed the client's full NICK.tmi.twitch.tv, and the next param is client's NICK again.
+                                    // 3. NAMES list
+                                    let names_prefix = format!("{}.{}", client_nick_str, SERVER_NAME);
 
-                                    let names_prefix = format!("{}.{}", client_nick, SERVER_NAME);
+                                    let users_in_chat_names_vec: Vec<&str> = vec![simulated_users::KOTTESWE.login_name, &client_nick_str];
 
-                                    // Simulated sender (e.g., Kotteswe)
-                                    let rpl_namreply_sender = format!(
-                                        ":{prefix} 353 {client_nick_param} = #{channel} :{user_in_chat}\r\n",
-                                        prefix = names_prefix, // e.g. justinfan123.tmi.twitch.tv
-                                        client_nick_param = client_nick, // e.g. justinfan123
-                                        channel = channel_name,
-                                        user_in_chat = SIMULATED_SENDER_LOGIN_NAME
-                                    );
-                                    println!("[{}] S: {}", client_addr_str, rpl_namreply_sender.trim_end());
-                                    if msg_to_send_tx.send(rpl_namreply_sender).await.is_err() { break; }
+                                    for user_in_chat_name_ref in users_in_chat_names_vec {
+                                        let twitch_namreply = irc::IrcMessage {
+                                            tags: None,
+                                            prefix: Some(names_prefix.clone()),
+                                            command: irc::RPL_NAMREPLY.to_string(),
+                                            // Params for 353: <client_nick> <symbol> <channel> :<user list>
+                                            params: vec![client_nick_str.clone(), "=".to_string(), format!("#{}", channel_name), format!(":{}", user_in_chat_name_ref)],
+                                        };
+                                        if msg_to_send_tx.send(twitch_namreply).await.is_err() { break; }
+                                    }
+                                    let endofnames = irc::IrcMessage {
+                                        tags: None,
+                                        prefix: Some(names_prefix.clone()),
+                                        command: irc::RPL_ENDOFNAMES.to_string(),
+                                        // Params for 366: <client_nick> <channel> :End of /NAMES list
+                                        params: vec![client_nick_str.clone(), format!("#{}", channel_name), ":End of /NAMES list".to_string()],
+                                    };
 
-                                    // The client itself
-                                    let rpl_namreply_self = format!(
-                                        ":{prefix} 353 {client_nick_param} = #{channel} :{user_in_chat}\r\n",
-                                         prefix = names_prefix,
-                                        client_nick_param = client_nick,
-                                        channel = channel_name,
-                                        user_in_chat = client_nick // Client's NICK
-                                    );
-                                    println!("[{}] S: {}", client_addr_str, rpl_namreply_self.trim_end());
-                                    if msg_to_send_tx.send(rpl_namreply_self).await.is_err() { break; }
-
-                                    // End of NAMES list (RPL_ENDOFNAMES)
-                                    let rpl_endofnames = format!(
-                                        ":{prefix} 366 {client_nick_param} #{channel} :End of /NAMES list\r\n",
-                                        prefix = names_prefix,
-                                        client_nick_param = client_nick,
-                                        channel = channel_name
-                                    );
-                                    println!("[{}] S: {}", client_addr_str, rpl_endofnames.trim_end());
-                                    if msg_to_send_tx.send(rpl_endofnames).await.is_err() { break; }
-
-                                    session_guard.state = ClientHandlerState::Joined;
+                                    if msg_to_send_tx.send(endofnames).await.is_err() { break; }
+                                    session.state = ClientHandlerState::Joined;
                                 }
                             }
-                            "PING" => {
-                                let payload = if parts.len() > 1 { parts[1] } else { "" }; // Payload often starts with ':'
-                                let pong_response = format!(":{SERVER_NAME} PONG {SERVER_NAME} {payload}\r\n", payload=payload);
-                                println!("[{}] S: {}", client_addr_str, pong_response.trim_end());
+                            irc::CMD_PING => {
+                                let payload = if parts.len() > 1 { parts[1] } else { "" };
+                                // PONG format: :<server_name> PONG <server_name> [:<payload_from_ping>]
+                                // The payload from client PING often starts with ':' if it's the second param
+                                let pong_response = irc::IrcMessage::new(irc::CMD_PONG, vec![SERVER_NAME, payload]);
                                 if msg_to_send_tx.send(pong_response).await.is_err() { break; }
                             }
-                            "PRIVMSG" => {
-                                // Client sent a message (e.g., if it's also a bot)
-                                println!("[{}] Client sent PRIVMSG, ignoring: {}", client_addr_str, incoming_msg_orig);
+                            irc::CMD_PRIVMSG => {
+                                println!("[{}] Client sent PRIVMSG, ignoring: {}", client_addr_str, incoming_msg_raw);
                             }
-                            "QUIT" => {
-                                println!("[{}] Client sent QUIT. Closing connection.", client_addr_str);
-                                break; // Exit main loop
+                            irc::CMD_QUIT => {
+                                println!("[{}] Client sent QUIT. Closing.", client_addr_str);
+                                break;
                             }
                             _ => {
-                                println!("[{}] Unknown command from client: {}", client_addr_str, command);
+                                println!("[{}] Unknown command from client: {}", client_addr_str, command_str);
                             }
                         }
-                        // session_guard (RwLockWriteGuard) is dropped here when it goes out of scope
                     }
-                    Err(e) => { // Error reading from client
-                        eprintln!("[{}] Error reading from client: {}. Closing connection.", client_addr_str, e);
-                        break; // Exit main loop
+                    Err(e) => {
+                        eprintln!("[{}] Error reading from client: {}. Closing.", client_addr_str, e);
+                        break;
                     }
                 }
             },
             _ = shutdown_signal.notified() => {
-                println!("[{}] Main handler loop: Shutdown signal received (likely from writer/periodic task failure). Exiting.", client_addr_str);
-                break; // Exit main loop
+                println!("[{}] Main handler: Shutdown signal received.", client_addr_str);
+                break;
             }
         }
     }
 
-    // Signal all associated tasks for this client to shut down
     shutdown_signal.notify_waiters();
-    println!(
-        "[{}] Client disconnected / handler finished.",
-        client_addr_str
-    );
+    println!("[{}] Client handler finished.", client_addr_str);
     Ok(())
 }
 
+// --- Server Main ---
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let listener_addr = format!("{}:{}", SPOOF_HOST, SPOOF_PORT);
     let listener = TcpListener::bind(&listener_addr).await?;
-    println!("Spoof Twitch IRC server listening on {}", listener_addr);
+    println!(
+        "Spoof Twitch IRC server v{} listening on {}",
+        SERVER_VERSION, listener_addr
+    );
 
     loop {
         let (stream, client_addr) = listener.accept().await?;
         tokio::spawn(async move {
             if let Err(e) = handle_client(stream, client_addr).await {
-                // Don't print error if it's due to a broken pipe, which is common if client disconnects abruptly
                 if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
-                    if io_err.kind() == std::io::ErrorKind::BrokenPipe {
-                        // Suppress broken pipe, client disconnected.
+                    if io_err.kind() == std::io::ErrorKind::BrokenPipe
+                        || io_err.kind() == std::io::ErrorKind::ConnectionReset
+                    {
+                        // Common client disconnects
                     } else {
-                        eprintln!("[{}] Error handling client: {}", client_addr, e);
+                        eprintln!("[{}] Error in client handler: {}", client_addr, e);
                     }
                 } else {
-                    eprintln!("[{}] Error handling client: {}", client_addr, e);
+                    eprintln!("[{}] Non-IO error in client handler: {}", client_addr, e);
                 }
             }
         });
