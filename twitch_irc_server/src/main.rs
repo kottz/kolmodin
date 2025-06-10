@@ -1,5 +1,6 @@
 // src/main.rs
 
+mod api;
 mod irc_server;
 mod ui;
 
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
 
     // --- Spawn IRC Server Task ---
     let server_log_tx_clone = log_tx.clone(); // Clone for the server task
+    let custom_msg_tx_for_api = custom_msg_tx.clone(); // Clone for the API server
     tokio::spawn(async move {
         if let Err(e) = irc_server::run_server(server_log_tx_clone, custom_msg_rx).await {
             // Log server error (e.g., using log_tx if UI is still running, or eprintln)
@@ -44,6 +46,13 @@ async fn main() -> Result<()> {
                 )))
                 .await;
             // Or eprintln!("IRC Server exited with error: {}", e);
+        }
+    });
+
+    // --- Spawn HTTP API Server Task ---
+    tokio::spawn(async move {
+        if let Err(e) = api::run_api_server(custom_msg_tx_for_api).await {
+            eprintln!("API Server exited with error: {}", e);
         }
     });
 
