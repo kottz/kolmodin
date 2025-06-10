@@ -8,6 +8,9 @@ use uuid::Uuid;
 pub enum ClientToServerMessage {
     /// Sent by the client immediately after WebSocket connection to associate with a lobby.
     ConnectToLobby { lobby_id: Uuid },
+    /// Sent by the client to explicitly leave the lobby and close the connection.
+    /// This indicates the user intentionally wants to be removed from the lobby.
+    LeaveLobby,
     /// For commands that are NOT specific to a game instance,
     /// e.g., authentication, lobby chat, or high-level controls.
     GlobalCommand {

@@ -841,6 +841,13 @@ impl GameLogic for DealNoDealGame {
                     }
                 }
             }
+            GenericClientToServerMessage::LeaveLobby => {
+                tracing::info!(
+                    client.id = %_client_id,
+                    "Client explicitly leaving lobby"
+                );
+                self.client_disconnected(_client_id).await;
+            }
             GenericClientToServerMessage::GlobalCommand { .. } => {
                 tracing::trace!("Received GlobalCommand (unhandled by DND specific logic)");
             }

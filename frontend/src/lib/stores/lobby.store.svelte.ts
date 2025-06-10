@@ -129,8 +129,8 @@ function createLobbyStore() {
 
 	function userLeaveLobby(): void {
 		info('LobbyStore: User initiated leave lobby.');
-		// Optional: Send a "LeaveLobby" message to the server via websocketStore if your protocol supports it.
-		// e.g., websocketStore.send({ message_type: 'LeaveLobbyCommand', payload: {} });
+		// Send LeaveLobby message to server to explicitly indicate intentional disconnect
+		websocketStore.send({ messageType: 'LeaveLobby' });
 		cleanupLobbyState(false); // Not due to an error, triggers graceful WS disconnect
 	}
 

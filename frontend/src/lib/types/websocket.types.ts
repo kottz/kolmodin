@@ -26,6 +26,7 @@ export interface GameSpecificCommandPayload {
 // Updated ClientToServerMessage
 export type ClientToServerMessage =
 	| { messageType: 'ConnectToLobby'; payload: ConnectToLobbyPayload } // Changed from 'Connect'
+	| { messageType: 'LeaveLobby' } // No payload needed for leaving
 	| { messageType: 'GlobalCommand'; payload: GlobalCommandPayload }
 	| { messageType: 'GameSpecificCommand'; payload: GameSpecificCommandPayload }
 	| { messageType: 'Heartbeat' }; // No payload for simple heartbeat
