@@ -2,6 +2,39 @@ use super::types::ParsedTwitchMessage;
 use chrono::Utc;
 use std::collections::HashMap;
 
+// IRC Commands
+pub const CMD_PING: &str = "PING";
+pub const CMD_PONG: &str = "PONG";
+pub const CMD_JOIN: &str = "JOIN";
+pub const CMD_PRIVMSG: &str = "PRIVMSG";
+pub const CMD_PASS: &str = "PASS";
+pub const CMD_NICK: &str = "NICK";
+pub const CMD_NOTICE: &str = "NOTICE";
+pub const CMD_RECONNECT: &str = "RECONNECT";
+pub const CMD_CAP: &str = "CAP";
+
+// IRC Replies
+pub const RPL_WELCOME: &str = "001";
+
+// IRC Keywords
+pub const IRC_ACK: &str = "ACK";
+pub const IRC_NAK: &str = "NAK";
+pub const IRC_REQ: &str = "REQ";
+
+// Special IRC strings
+pub const IRC_WELCOME_TEXT: &str = ":Welcome";
+pub const HEALTH_CHECK_PING: &str = "PING :health-check";
+pub const HEALTH_CHECK_PONG_CONTENT: &str = ":health-check";
+
+// Twitch capabilities
+pub const TWITCH_CAPABILITIES: &str =
+    "CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands";
+
+// Authentication error messages
+pub const AUTH_ERROR_LOGIN_FAILED: &str = "Login authentication failed";
+pub const AUTH_ERROR_IMPROPERLY_FORMATTED: &str = "Improperly formatted auth";
+pub const AUTH_ERROR_INVALID_NICK: &str = "Invalid NICK";
+
 #[derive(Debug, Default)]
 pub struct IrcMessage<'a> {
     raw: &'a str,
@@ -95,7 +128,7 @@ impl<'a> IrcMessage<'a> {
     }
 
     pub fn get_privmsg_text_content(&self) -> Option<&'a str> {
-        if self.command == Some("PRIVMSG") && self.params.len() > 1 {
+        if self.command == Some(CMD_PRIVMSG) && self.params.len() > 1 {
             self.params.last().copied()
         } else {
             None
@@ -103,7 +136,7 @@ impl<'a> IrcMessage<'a> {
     }
 
     pub fn to_parsed_twitch_message(&self, channel_name_str: &str) -> Option<ParsedTwitchMessage> {
-        if self.command != Some("PRIVMSG") {
+        if self.command != Some(CMD_PRIVMSG) {
             return None;
         }
         let target_channel_in_msg = self.params.first()?.trim_start_matches('#');
