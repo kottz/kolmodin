@@ -250,6 +250,7 @@ async fn handle_client(
                     let raw_msg_str = broadcast_msg.to_string();
                      if writer_half.write_all(raw_msg_str.as_bytes()).await.is_err() || writer_half.flush().await.is_err() {
                         let _ = log_tx_writer.send(ServerLog::Internal(format!("[{}] Writer: Error writing broadcast.", addr))).await;
+                        break; // Exit the writer task when client is disconnected
                     } else {
                         let _ = log_tx_writer.send(ServerLog::Outgoing(addr, raw_msg_str.trim_end().to_string())).await;
                     }
