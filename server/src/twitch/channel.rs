@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::auth::TokenProvider;
 use super::connection::run_irc_connection_loop;
 use super::error::{Result as TwitchResult, TwitchError};
-use super::irc_parser::{IrcMessage, IrcParseError};
+use super::irc_parser::IrcMessage;
 use super::types::{ChannelTerminationInfo, ParsedTwitchMessage, TwitchChannelConnectionStatus};
 
 #[derive(Debug)]
@@ -301,64 +301,60 @@ impl TwitchChannelActor {
         self.current_status = new_status.clone();
         update_channel_status(&self.status_sender, new_status.clone());
 
-        match new_status {
-            TwitchChannelConnectionStatus::Disconnected { reason } => {
+        if let TwitchChannelConnectionStatus::Disconnected { reason } = new_status {
+            tracing::info!(
+                channel.name = %self.channel_name,
+                actor.id = %self.actor_id,
+                reason = %reason,
+                "Received Disconnected status"
+            );
+
+            let irc_loop_task_has_exited = self
+                .irc_connection_task_handle
+                .as_ref()
+                .is_none_or(|h| h.is_finished());
+
+            if irc_loop_task_has_exited {
                 tracing::info!(
                     channel.name = %self.channel_name,
                     actor.id = %self.actor_id,
-                    reason = %reason,
-                    "Received Disconnected status"
+                    "The IRC connection loop task has exited"
                 );
 
-                let irc_loop_task_has_exited = self
-                    .irc_connection_task_handle
-                    .as_ref()
-                    .is_none_or(|h| h.is_finished());
-
-                if irc_loop_task_has_exited {
-                    tracing::info!(
-                        channel.name = %self.channel_name,
-                        actor.id = %self.actor_id,
-                        "The IRC connection loop task has exited"
-                    );
-
-                    if reason.contains("Critical") || reason.contains("Authentication") {
-                        tracing::error!(
-                            channel.name = %self.channel_name,
-                            actor.id = %self.actor_id,
-                            reason = %reason,
-                            "Critical IRC error after loop exit. Actor shutting down"
-                        );
-                        self.initiate_actor_shutdown(true).await;
-                        return;
-                    } else if self.subscribers.is_empty() {
-                        tracing::info!(
-                            channel.name = %self.channel_name,
-                            actor.id = %self.actor_id,
-                            reason = %reason,
-                            "IRC loop exited and no subscribers. Actor shutting down"
-                        );
-                        self.initiate_actor_shutdown(true).await;
-                        return;
-                    } else {
-                        tracing::debug!(
-                            channel.name = %self.channel_name,
-                            actor.id = %self.actor_id,
-                            reason = %reason,
-                            "IRC loop exited but actor has subscribers. Attempting to restart IRC task"
-                        );
-                        self.start_irc_connection_task().await;
-                    }
-                } else {
-                    tracing::trace!(
+                if reason.contains("Critical") || reason.contains("Authentication") {
+                    tracing::error!(
                         channel.name = %self.channel_name,
                         actor.id = %self.actor_id,
                         reason = %reason,
-                        "IRC connection attempt failed, but IRC loop is still active and will retry. Actor remains active"
+                        "Critical IRC error after loop exit. Actor shutting down"
                     );
+                    self.initiate_actor_shutdown(true).await;
+                } else if self.subscribers.is_empty() {
+                    tracing::info!(
+                        channel.name = %self.channel_name,
+                        actor.id = %self.actor_id,
+                        reason = %reason,
+                        "IRC loop exited and no subscribers. Actor shutting down"
+                    );
+                    self.initiate_actor_shutdown(true).await;
+                    return;
+                } else {
+                    tracing::debug!(
+                        channel.name = %self.channel_name,
+                        actor.id = %self.actor_id,
+                        reason = %reason,
+                        "IRC loop exited but actor has subscribers. Attempting to restart IRC task"
+                    );
+                    self.start_irc_connection_task().await;
                 }
+            } else {
+                tracing::trace!(
+                    channel.name = %self.channel_name,
+                    actor.id = %self.actor_id,
+                    reason = %reason,
+                    "IRC connection attempt failed, but IRC loop is still active and will retry. Actor remains active"
+                );
             }
-            _ => {}
         }
     }
 
@@ -498,7 +494,7 @@ fn update_channel_status(
     status_sender: &watch::Sender<TwitchChannelConnectionStatus>,
     new_status: TwitchChannelConnectionStatus,
 ) {
-    if let Err(_) = status_sender.send(new_status.clone()) {
+    if status_sender.send(new_status.clone()).is_err() {
         tracing::warn!(
             status = ?new_status,
             "Failed to update channel status, receiver dropped. This channel actor may be orphaned"

@@ -23,7 +23,7 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
     let n = s1_chars.len();
     let m = s2_chars.len();
 
-    if (n as isize - m as isize).abs() as usize > threshold {
+    if (n as isize - m as isize).unsigned_abs() > threshold {
         return None;
     }
 
@@ -36,8 +36,8 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
 
     let mut dp = vec![vec![threshold + 1; m + 1]; n + 1];
 
-    for i in 0..=n {
-        dp[i][0] = i; // Cost if s2 is empty
+    for (i, row) in dp.iter_mut().enumerate().take(n + 1) {
+        row[0] = i; // Cost if s2 is empty
     }
     for j in 0..=m {
         dp[0][j] = j; // Cost if s1 is empty
@@ -63,7 +63,7 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
             // If |i-j| > threshold, then this cell (i,j) must have cost > threshold
             // due to insertions/deletions alone. We can skip it or mark its cost high.
             // This is effectively handled by `min_cost_in_relevant_band_this_row` and capping `dp[i][j]`.
-            if (i as isize - j as isize).abs() as usize > threshold
+            if (i as isize - j as isize).unsigned_abs() > threshold
                 && dp[i - 1][j - 1] > threshold
                 && dp[i - 1][j] > threshold
                 && dp[i][j - 1] > threshold
@@ -71,7 +71,7 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
                 // if all paths to here are already > threshold and this cell is outside the main diagonal band.
                 // this check makes it slightly more aggressive for cells far from diagonal.
                 dp[i][j] = threshold + 1; // Mark as too expensive
-                if (i as isize - j as isize).abs() as usize <= threshold {
+                if (i as isize - j as isize).unsigned_abs() <= threshold {
                     // check if this cell itself is in the band
                     min_cost_in_relevant_band_this_row =
                         min(min_cost_in_relevant_band_this_row, dp[i][j]);
@@ -115,7 +115,7 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
 
             dp[i][j] = min(current_dp_val, threshold + 1);
 
-            if (i as isize - j as isize).abs() as usize <= threshold {
+            if (i as isize - j as isize).unsigned_abs() <= threshold {
                 min_cost_in_relevant_band_this_row =
                     min(min_cost_in_relevant_band_this_row, dp[i][j]);
             }
