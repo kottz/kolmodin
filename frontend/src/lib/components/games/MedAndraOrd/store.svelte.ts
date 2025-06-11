@@ -3,7 +3,12 @@
 import { registerGameStore, broadcastCurrentGameState } from '$lib/services/game.event.router';
 import { websocketStore } from '$lib/stores/websocket.store.svelte';
 import type { ClientToServerMessage, GameSpecificCommandPayload } from '$lib/types/websocket.types';
-import type { MedAndraOrdGameState, GameEventData, MedAndraOrdCommandData } from './types';
+import type {
+	MedAndraOrdGameState,
+	GameEventData,
+	MedAndraOrdCommandData,
+	MedAndraOrdPublicState
+} from './types';
 import type { StreamEvent, BasePublicGameState } from '$lib/types/stream.types';
 import { StreamEventManager, createPublicLeaderboard } from '$lib/utils/stream.utils';
 import { debug, warn, info } from '$lib/utils/logger';
@@ -18,18 +23,7 @@ interface MedAndraOrdStoreActions {
 	setGameDuration: (seconds: number) => void;
 	setPointLimitEnabled: (enabled: boolean) => void;
 	setTimeLimitEnabled: (enabled: boolean) => void;
-}
-
-// Define public state structure for streaming
-interface MedAndraOrdPublicState extends BasePublicGameState {
-	phase: { type: string; data?: unknown };
-	targetPoints: number;
-	gameDurationSeconds: number;
-	pointLimitEnabled: boolean;
-	timeLimitEnabled: boolean;
-	leaderboard: Array<{ player: string; points: number; rank: number }>;
-	playersCount: number;
-	timeRemaining?: number; // Only when game is active and time limit enabled
+	removeRecentGuess: (guessId: string) => void;
 }
 
 function createInitialMedAndraOrdState(): MedAndraOrdGameState {
@@ -39,7 +33,8 @@ function createInitialMedAndraOrdState(): MedAndraOrdGameState {
 		game_duration_seconds: 300, // 5 minutes default
 		point_limit_enabled: true,
 		time_limit_enabled: false,
-		player_scores: {}
+		player_scores: {},
+		recent_guesses: []
 	};
 }
 
@@ -301,6 +296,21 @@ function createMedAndraOrdStore() {
 				}
 				break;
 
+			case 'RecentGuessesUpdated':
+				info('MedAndraOrdStore: Recent guesses updated');
+				gameState.recent_guesses = eventPayload.data.recent_guesses;
+
+				// Add stream event for recent guesses update
+				streamEventManager.addEvent(
+					'RECENT_GUESSES_UPDATED',
+					{ recentGuesses: eventPayload.data.recent_guesses },
+					1000
+				);
+
+				// Broadcast state update to stream window
+				broadcastCurrentGameState();
+				break;
+
 			default:
 				warn(
 					`MedAndraOrdStore: Unhandled event type: ${(eventPayload as { event_type: string }).event_type}`
@@ -312,9 +322,10 @@ function createMedAndraOrdStore() {
 		command: MedAndraOrdCommandData['command'],
 		points?: number,
 		seconds?: number,
-		enabled?: boolean
+		enabled?: boolean,
+		guess_id?: string
 	): void {
-		const commandData: MedAndraOrdCommandData = { command, points, seconds, enabled };
+		const commandData: MedAndraOrdCommandData = { command, points, seconds, enabled, guess_id };
 		const payload: GameSpecificCommandPayload = {
 			game_type_id: GAME_TYPE_ID,
 			command_data: commandData
@@ -335,7 +346,9 @@ function createMedAndraOrdStore() {
 		setPointLimitEnabled: (enabled: boolean) =>
 			sendCommand('SetPointLimitEnabled', undefined, undefined, enabled),
 		setTimeLimitEnabled: (enabled: boolean) =>
-			sendCommand('SetTimeLimitEnabled', undefined, undefined, enabled)
+			sendCommand('SetTimeLimitEnabled', undefined, undefined, enabled),
+		removeRecentGuess: (guessId: string) =>
+			sendCommand('RemoveRecentGuess', undefined, undefined, undefined, guessId)
 	};
 
 	// Register with game event router, including streaming capabilities

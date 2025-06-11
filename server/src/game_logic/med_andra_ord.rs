@@ -19,6 +19,15 @@ use crate::twitch::ParsedTwitchMessage;
 const GAME_TYPE_ID_MED_ANDRA_ORD: &str = "MedAndraOrd";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RecentGuess {
+    pub id: String,
+    pub player: String,
+    pub guessed_text: String,
+    pub correct_word: String,
+    pub timestamp: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "command")]
 pub enum AdminCommand {
     StartGame,
@@ -28,6 +37,7 @@ pub enum AdminCommand {
     SetGameDuration { seconds: u32 },
     SetPointLimitEnabled { enabled: bool },
     SetTimeLimitEnabled { enabled: bool },
+    RemoveRecentGuess { guess_id: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -38,6 +48,7 @@ pub enum GameEvent {
     PlayerScored { player: String, points: u32 },
     GamePhaseChanged { new_phase: GamePhase },
     GameTimeUpdate { remaining_seconds: u64 },
+    RecentGuessesUpdated { recent_guesses: Vec<RecentGuess> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -59,6 +70,7 @@ pub struct MedAndraOrdGameState {
     pub point_limit_enabled: bool,
     pub time_limit_enabled: bool,
     pub player_scores: HashMap<String, u32>,
+    pub recent_guesses: Vec<RecentGuess>,
 
     #[serde(skip)]
     current_word_list: Arc<Vec<String>>,
@@ -78,6 +90,7 @@ impl Clone for MedAndraOrdGameState {
             point_limit_enabled: self.point_limit_enabled,
             time_limit_enabled: self.time_limit_enabled,
             player_scores: self.player_scores.clone(),
+            recent_guesses: self.recent_guesses.clone(),
             current_word_list: Arc::clone(&self.current_word_list),
             local_used_words: self.local_used_words.clone(),
             game_start_time: self.game_start_time,
@@ -95,6 +108,7 @@ impl MedAndraOrdGameState {
             point_limit_enabled: true,
             time_limit_enabled: false,
             player_scores: HashMap::new(),
+            recent_guesses: Vec::new(),
             current_word_list: word_list_snapshot,
             local_used_words: HashSet::new(),
             game_start_time: None,
@@ -298,6 +312,7 @@ impl MedAndraOrdGameState {
         self.phase = GamePhase::Setup;
         self.player_scores.clear();
         self.local_used_words.clear();
+        self.recent_guesses.clear();
         self.game_start_time = None;
 
         self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
@@ -330,6 +345,57 @@ impl MedAndraOrdGameState {
         }
     }
 
+    /// Adds a correct guess to the recent guesses list, maintaining a maximum of 5 entries.
+    fn add_recent_guess(&mut self, player: &str, guessed_text: &str, correct_word: &str) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let guess = RecentGuess {
+            id: uuid::Uuid::new_v4().to_string(),
+            player: player.to_string(),
+            guessed_text: guessed_text.to_string(),
+            correct_word: correct_word.to_string(),
+            timestamp,
+        };
+
+        // Add to front of list
+        self.recent_guesses.insert(0, guess);
+
+        // Keep only the 5 most recent
+        if self.recent_guesses.len() > 5 {
+            self.recent_guesses.truncate(5);
+        }
+    }
+
+    /// Removes a recent guess by ID and deducts one point from the player.
+    async fn handle_remove_recent_guess(&mut self, guess_id: &str) {
+        if let Some(pos) = self.recent_guesses.iter().position(|g| g.id == guess_id) {
+            let removed_guess = self.recent_guesses.remove(pos);
+
+            // Deduct point from player
+            if let Some(current_score) = self.player_scores.get_mut(&removed_guess.player) {
+                if *current_score > 0 {
+                    *current_score -= 1;
+
+                    tracing::info!(
+                        player = %removed_guess.player,
+                        guess = %removed_guess.guessed_text,
+                        word = %removed_guess.correct_word,
+                        new_score = *current_score,
+                        "Removed recent guess and deducted point"
+                    );
+                }
+            }
+
+            self.broadcast_game_event_to_all(GameEvent::RecentGuessesUpdated {
+                recent_guesses: self.recent_guesses.clone(),
+            })
+            .await;
+        }
+    }
+
     fn get_next_word(&mut self) -> Option<String> {
         if self.current_word_list.is_empty() {
             tracing::warn!("Word list is empty, cannot get next word");
@@ -353,7 +419,12 @@ impl MedAndraOrdGameState {
         }
     }
 
-    async fn process_correct_guess(&mut self, player: &str) {
+    async fn process_correct_guess(
+        &mut self,
+        player: &str,
+        guessed_text: &str,
+        correct_word: &str,
+    ) {
         if self.check_game_time_expired() {
             self.end_game_time_expired().await;
             return;
@@ -361,11 +432,18 @@ impl MedAndraOrdGameState {
 
         let current_score = self.player_scores.entry(player.to_string()).or_insert(0);
         *current_score += 1;
-        let new_score = *current_score; // Get value after update
+        let new_score = *current_score;
+
+        self.add_recent_guess(player, guessed_text, correct_word);
 
         self.broadcast_game_event_to_all(GameEvent::PlayerScored {
             player: player.to_string(),
-            points: new_score, // Use the new score
+            points: new_score,
+        })
+        .await;
+
+        self.broadcast_game_event_to_all(GameEvent::RecentGuessesUpdated {
+            recent_guesses: self.recent_guesses.clone(),
         })
         .await;
 
@@ -467,6 +545,9 @@ impl GameLogic for MedAndraOrdGameState {
                             AdminCommand::SetTimeLimitEnabled { enabled } => {
                                 self.handle_set_time_limit_enabled(enabled)
                             }
+                            AdminCommand::RemoveRecentGuess { guess_id } => {
+                                self.handle_remove_recent_guess(&guess_id).await
+                            }
                         }
                         self.broadcast_full_state_update().await;
                     }
@@ -508,15 +589,17 @@ impl GameLogic for MedAndraOrdGameState {
             }
 
             let guess = message.text.trim();
+            let word = current_word.clone();
 
-            if is_guess_acceptable(current_word, guess) {
+            if is_guess_acceptable(&word, guess) {
                 tracing::debug!(
                     guess = %guess,
                     player = %message.sender_username,
                     "Correct guess"
                 );
-                self.local_used_words.insert(current_word.clone()); // Use local_used_words
-                self.process_correct_guess(&message.sender_username).await;
+                self.local_used_words.insert(word.clone());
+                self.process_correct_guess(&message.sender_username, guess, &word)
+                    .await;
                 self.broadcast_full_state_update().await;
             }
         }

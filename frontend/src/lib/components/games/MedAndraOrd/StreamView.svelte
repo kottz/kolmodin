@@ -2,7 +2,7 @@
 	import { fly, scale } from 'svelte/transition';
 	import { elasticOut } from 'svelte/easing';
 	import { onDestroy } from 'svelte';
-	import type { MedAndraOrdPublicState } from './types';
+	import type { MedAndraOrdPublicState, RecentGuess } from './types';
 
 	interface Props {
 		gameState: MedAndraOrdPublicState;
@@ -13,7 +13,7 @@
 	// Get stream events from the stream store
 	import { streamStore } from '$lib/stores/stream.store.svelte';
 
-	// Track guess history
+	// Track guess history (now using server's recent guesses)
 	interface GuessHistoryEntry {
 		id: string;
 		player: string;
@@ -22,7 +22,21 @@
 		timestamp: number;
 	}
 
-	let guessHistory = $state<GuessHistoryEntry[]>([]);
+	// Local state for recent guesses (updated via stream events)
+	let recentGuesses = $state<RecentGuess[]>([]);
+
+	// Convert recent guesses to display format
+	const displayGuesses = $derived(() => {
+		return recentGuesses.map(
+			(guess): GuessHistoryEntry => ({
+				id: guess.id,
+				player: guess.player,
+				guess: guess.guessed_text,
+				isCorrect: true, // All recent guesses are correct
+				timestamp: guess.timestamp * 1000 // Convert to milliseconds
+			})
+		);
+	});
 
 	// Track current instruction card state
 	let instructionState = $state<{
@@ -85,6 +99,9 @@
 			if (event.type === 'CORRECT_ANSWER' && event.data.player && event.data.word) {
 				showCorrectAnswer(event.data.player, event.data.word);
 				processedEventIds.add(eventId);
+			} else if (event.type === 'RECENT_GUESSES_UPDATED' && event.data.recentGuesses) {
+				recentGuesses = event.data.recentGuesses;
+				processedEventIds.add(eventId);
 			}
 		});
 
@@ -96,9 +113,6 @@
 	}
 
 	function showCorrectAnswer(player: string, word: string) {
-		// Add to guess history
-		addGuessToHistory(player, word, true);
-
 		// Update instruction card
 		instructionState = {
 			text: `${player} was correct!`,
@@ -118,27 +132,6 @@
 			};
 			instructionTimeout = null;
 		}, 6000);
-	}
-
-	// Add a guess to history
-	function addGuessToHistory(player: string, guess: string, isCorrect: boolean = false) {
-		// Prevent duplicate entries
-		const isDuplicate = guessHistory.some(
-			(h) => h.player === player && h.guess === guess && Math.abs(h.timestamp - Date.now()) < 2000
-		);
-
-		if (isDuplicate) return;
-
-		guessHistory = [
-			{
-				id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-				player,
-				guess,
-				isCorrect,
-				timestamp: Date.now()
-			},
-			...guessHistory.slice(0, 4) // Keep only 5 most recent
-		];
 	}
 
 	function formatTime(seconds: number): string {
@@ -204,10 +197,10 @@
 	// Reset state when game phase changes
 	function handlePhaseChange() {
 		if (gameState.phase.type === 'Setup') {
-			guessHistory = [];
 			processedEventIds.clear();
 			gameOverAnimationState = 'none';
 			instructionState = { text: 'Listen carefully and guess in chat!', type: 'instruction' };
+			recentGuesses = []; // Clear recent guesses on setup
 			resetStreamTimer();
 		} else if (gameState.phase.type === 'Playing') {
 			// Start the stream timer when game starts
@@ -538,7 +531,7 @@
 					<div class="h-full rounded-2xl border border-white/10 bg-black/20 p-6 backdrop-blur-sm">
 						<h2 class="mb-6 text-center text-2xl font-bold text-white">Recent Guesses</h2>
 						<div class="space-y-3">
-							{#each guessHistory as guess, index (guess.id)}
+							{#each displayGuesses() as guess, index (guess.id)}
 								<div
 									class="rounded-xl p-4 transition-all duration-300 {guess.isCorrect
 										? 'border border-green-500/30 bg-green-500/20'
@@ -561,7 +554,7 @@
 								</div>
 							{/each}
 
-							{#if guessHistory.length === 0}
+							{#if displayGuesses().length === 0}
 								<div class="flex h-32 items-center justify-center text-white/50">
 									No guesses yet...
 								</div>

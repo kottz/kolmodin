@@ -13,6 +13,7 @@
 		CardDescription
 	} from '$lib/components/ui/card';
 	import Badge from '$lib/components/ui/badge.svelte';
+	import RecentGuesses from './RecentGuesses.svelte';
 
 	const gameState = $derived(medAndraOrdStore.gameState);
 	const leaderboard = $derived(medAndraOrdStore.leaderboard);
@@ -189,6 +190,14 @@
 
 				<!-- Stream Controls Card -->
 				<StreamControls />
+
+				<!-- Recent Guesses (only show during Playing phase) -->
+				{#if currentPhase === 'Playing'}
+					<RecentGuesses
+						recentGuesses={gameState.recent_guesses}
+						onRemoveGuess={medAndraOrdStore.actions.removeRecentGuess}
+					/>
+				{/if}
 
 				<!-- Game Info -->
 				<Card>
