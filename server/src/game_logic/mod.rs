@@ -32,7 +32,15 @@ pub enum GameType {
 
 impl GameType {
     pub fn all() -> Vec<Self> {
-        vec![GameType::DealNoDeal, GameType::MedAndraOrd]
+        let game_types = vec![GameType::DealNoDeal, GameType::MedAndraOrd];
+
+        // Compile-time assertion: this should never be empty
+        debug_assert!(
+            !game_types.is_empty(),
+            "GameType::all() must never return empty list"
+        );
+
+        game_types
     }
 
     pub fn aliases(&self) -> &'static [&'static str] {

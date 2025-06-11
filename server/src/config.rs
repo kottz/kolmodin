@@ -51,7 +51,18 @@ pub struct GamesConfig {
 
 impl Default for GamesConfig {
     fn default() -> Self {
-        let enabled_types = GameType::all()
+        let all_game_types = GameType::all();
+
+        if all_game_types.is_empty() {
+            tracing::error!("GameType::all() returned empty list - this should never happen");
+            // Fallback to known safe defaults
+            let mut enabled_types = HashSet::new();
+            enabled_types.insert("dealnodeal".to_string());
+            enabled_types.insert("medandraord".to_string());
+            return Self { enabled_types };
+        }
+
+        let enabled_types = all_game_types
             .iter()
             .map(|game_type| game_type.primary_id().to_string())
             .collect();
@@ -83,7 +94,16 @@ pub struct AppSettings {
 
 #[tracing::instrument]
 pub fn load_settings() -> AppResult<AppSettings> {
-    let default_games_enabled_types: Vec<Value> = GameType::all()
+    let all_game_types = GameType::all();
+
+    if all_game_types.is_empty() {
+        return Err(ConfigError::Load(
+            "GameType::all() returned empty list - no game types available".to_string(),
+        )
+        .into());
+    }
+
+    let default_games_enabled_types: Vec<Value> = all_game_types
         .iter()
         .map(|game_type| Value::new(None, ValueKind::String(game_type.primary_id().to_string())))
         .collect();
@@ -172,7 +192,13 @@ where
         Value::String(s) => {
             let trimmed = s.trim().to_lowercase();
             if trimmed == "all" {
-                for game_type in GameType::all() {
+                let all_game_types = GameType::all();
+                if all_game_types.is_empty() {
+                    return Err(D::Error::custom(
+                        "GameType::all() returned empty list - no game types available",
+                    ));
+                }
+                for game_type in all_game_types {
                     set.insert(game_type.primary_id().to_string());
                 }
             } else {
