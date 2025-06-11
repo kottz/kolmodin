@@ -250,7 +250,6 @@ impl TwitchChatManagerActor {
                         );
                         // Create a ChannelTerminationInfo for panicked/cancelled actors
                         let termination_info = ChannelTerminationInfo {
-                            channel_name: channel_name_for_monitoring.clone(),
                             actor_id: uuid::Uuid::new_v4(), // We don't have the real actor_id
                             final_status: TwitchChannelConnectionStatus::Terminated,
                         };
@@ -353,8 +352,9 @@ impl TwitchChatManagerActor {
     ) {
         tracing::info!(
             channel.name = %channel_name,
-            termination_info = ?termination_info,
-            "Channel actor completed with status"
+            actor.id = %termination_info.actor_id,
+            actor.final_status = ?termination_info.final_status,
+            "Channel actor completed"
         );
 
         if self.active_channels.remove(&channel_name).is_some() {

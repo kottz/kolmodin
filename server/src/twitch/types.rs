@@ -27,7 +27,6 @@ pub enum TwitchChannelConnectionStatus {
 
 #[derive(Debug, Clone)]
 pub struct ChannelTerminationInfo {
-    pub channel_name: String,
     pub actor_id: Uuid,
     pub final_status: TwitchChannelConnectionStatus,
 }

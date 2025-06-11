@@ -220,23 +220,6 @@ impl MedAndraOrdGameState {
         }
     }
 
-    pub fn get_remaining_game_time(&self) -> Option<u64> {
-        if !self.time_limit_enabled {
-            return None;
-        }
-
-        if let Some(start_time) = self.game_start_time {
-            let elapsed = start_time.elapsed().as_secs();
-            if elapsed >= self.game_duration_seconds {
-                Some(0)
-            } else {
-                Some(self.game_duration_seconds - elapsed)
-            }
-        } else {
-            Some(self.game_duration_seconds)
-        }
-    }
-
     async fn end_game_time_expired(&mut self) {
         let winner = self
             .player_scores
@@ -495,13 +478,6 @@ impl MedAndraOrdGameState {
             })
             .await;
             tracing::warn!("Ran out of words after correct guess");
-        }
-    }
-
-    pub async fn check_and_handle_game_expiration(&mut self) {
-        if matches!(self.phase, GamePhase::Playing { .. }) && self.check_game_time_expired() {
-            self.end_game_time_expired().await;
-            self.broadcast_full_state_update().await;
         }
     }
 }

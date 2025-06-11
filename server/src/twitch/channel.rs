@@ -26,7 +26,6 @@ pub enum TwitchChannelActorMessage {
     InternalConnectionStatusChanged {
         new_status: TwitchChannelConnectionStatus,
     },
-    Shutdown,
 }
 
 pub struct ChannelActorState {
@@ -36,7 +35,6 @@ pub struct ChannelActorState {
 #[derive(Clone, Debug)]
 pub struct TwitchChannelActorHandle {
     pub sender: mpsc::Sender<TwitchChannelActorMessage>,
-    pub channel_name: String, // Keep for identification
     status_rx: watch::Receiver<TwitchChannelConnectionStatus>,
 }
 
@@ -62,7 +60,6 @@ impl TwitchChannelActorHandle {
         (
             Self {
                 sender: actor_tx,
-                channel_name,
                 status_rx,
             },
             join_handle,
@@ -230,14 +227,6 @@ impl TwitchChannelActor {
             }
             TwitchChannelActorMessage::InternalConnectionStatusChanged { new_status } => {
                 self.handle_connection_status_change(new_status).await;
-            }
-            TwitchChannelActorMessage::Shutdown => {
-                tracing::info!(
-                    channel.name = %self.channel_name,
-                    actor.id = %self.actor_id,
-                    "Received shutdown signal"
-                );
-                self.shutdown_irc_connection_task().await;
             }
         }
     }
@@ -484,7 +473,6 @@ pub async fn run_twitch_channel_actor(mut actor: TwitchChannelActor) -> ChannelT
     );
 
     ChannelTerminationInfo {
-        channel_name,
         actor_id,
         final_status: actor.current_status,
     }

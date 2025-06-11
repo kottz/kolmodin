@@ -45,26 +45,6 @@ impl GameType {
     pub fn primary_id(&self) -> &'static str {
         self.aliases()[0]
     }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        let s_lower = s.to_lowercase();
-        Self::all()
-            .into_iter()
-            .find(|game_type| game_type.aliases().iter().any(|alias| *alias == s_lower))
-    }
-
-    pub fn to_game_type_id(&self) -> String {
-        match self {
-            GameType::DealNoDeal => "DealNoDeal".to_string(),
-            GameType::MedAndraOrd => "MedAndraOrd".to_string(),
-        }
-    }
-}
-
-impl GameType {
-    pub fn create_deal_no_deal_game() -> DealNoDealGame {
-        DealNoDealGame::new()
-    }
 }
 
 pub trait GameLogic: Send + Sync + Debug {

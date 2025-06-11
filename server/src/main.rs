@@ -73,10 +73,8 @@ async fn main() -> AppResult<()> {
 
     let app_state = AppState {
         lobby_manager: lobby_manager_handle,
-        twitch_chat_manager: twitch_chat_manager_handle,
         word_list_manager,
         server_config: server_config_for_state,
-        token_provider,
     };
 
     tracing::info!(
