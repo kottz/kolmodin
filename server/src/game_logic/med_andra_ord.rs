@@ -230,7 +230,7 @@ impl MedAndraOrdGameState {
             return;
         }
 
-        self.local_used_words.clear();
+        // Only clear player scores, not used words - preserve used words across multiple games
         self.player_scores.clear();
         self.game_start_time = Some(Instant::now());
 
