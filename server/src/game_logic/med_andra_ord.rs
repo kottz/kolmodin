@@ -43,7 +43,6 @@ pub enum AdminCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "event_type", content = "data")]
 pub enum GameEvent {
-    FullStateUpdate(MedAndraOrdGameState),
     WordChanged { word: String, is_placeholder: bool },
     PlayerScored { player: String, points: u32 },
     GamePhaseChanged { new_phase: GamePhase },
@@ -153,8 +152,45 @@ impl MedAndraOrdGameState {
 
     async fn broadcast_full_state_update(&mut self) {
         let state_clone = self.clone();
-        self.broadcast_game_event_to_all(GameEvent::FullStateUpdate(state_clone))
-            .await;
+        match GenericServerToClientMessage::new_game_specific_event(
+            GAME_TYPE_ID_MED_ANDRA_ORD.to_string(),
+            &serde_json::json!({
+                "event_type": "FullStateUpdate",
+                "data": state_clone
+            }),
+        ) {
+            Ok(wrapped_message) => {
+                self.broadcast_generic_message_to_all(wrapped_message).await;
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Failed to serialize FullStateUpdate for broadcast"
+                );
+            }
+        }
+    }
+
+    async fn send_full_state_to_client(&self, client_id: &Uuid, state: &MedAndraOrdGameState) {
+        match GenericServerToClientMessage::new_game_specific_event(
+            GAME_TYPE_ID_MED_ANDRA_ORD.to_string(),
+            &serde_json::json!({
+                "event_type": "FullStateUpdate",
+                "data": state
+            }),
+        ) {
+            Ok(wrapped_message) => {
+                self.send_generic_message_to_client(client_id, wrapped_message)
+                    .await;
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    client.id = %client_id,
+                    "Failed to serialize FullStateUpdate for client"
+                );
+            }
+        }
     }
 
     async fn send_generic_message_to_client(
@@ -496,9 +532,7 @@ impl GameLogic for MedAndraOrdGameState {
             "Client connected"
         );
         self.clients.insert(client_id, client_tx);
-        let state_clone = self.clone();
-        self.send_game_event_to_client(&client_id, GameEvent::FullStateUpdate(state_clone))
-            .await;
+        self.send_full_state_to_client(&client_id, self).await;
     }
 
     async fn client_disconnected(&mut self, client_id: Uuid) {

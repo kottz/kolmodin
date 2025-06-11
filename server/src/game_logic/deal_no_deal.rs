@@ -33,7 +33,6 @@ pub enum AdminCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "event_type", content = "data")]
 pub enum GameEvent {
-    FullStateUpdate(DealNoDealGame),
     PlayerVoteRegistered {
         voter_username: String,
         vote_value: String,
@@ -171,16 +170,9 @@ impl DealNoDealGame {
     }
 
     async fn send_game_event_to_client(&self, client_id: &Uuid, event_payload: GameEvent) {
-        let event_to_send = match event_payload {
-            GameEvent::FullStateUpdate(mut state_for_client) => {
-                state_for_client.prepare_for_client_view();
-                GameEvent::FullStateUpdate(state_for_client)
-            }
-            _ => event_payload,
-        };
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_DND.to_string(),
-            &event_to_send,
+            &event_payload,
         ) {
             Ok(wrapped) => {
                 self.send_generic_message_to_client_internal(client_id, wrapped)
@@ -194,17 +186,32 @@ impl DealNoDealGame {
         }
     }
 
-    async fn broadcast_game_event_to_all_admins(&self, event_payload: GameEvent) {
-        let event_to_send = match event_payload {
-            GameEvent::FullStateUpdate(mut state_for_client) => {
-                state_for_client.prepare_for_client_view();
-                GameEvent::FullStateUpdate(state_for_client)
-            }
-            _ => event_payload,
-        };
+    async fn send_full_state_to_client(&self, client_id: &Uuid) {
+        let mut state_for_client = self.clone();
+        state_for_client.prepare_for_client_view();
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_DND.to_string(),
-            &event_to_send,
+            &serde_json::json!({
+                "event_type": "FullStateUpdate",
+                "data": state_for_client
+            }),
+        ) {
+            Ok(wrapped) => {
+                self.send_generic_message_to_client_internal(client_id, wrapped)
+                    .await
+            }
+            Err(e) => tracing::error!(
+                client.id = %client_id,
+                error = %e,
+                "Failed to serialize FullStateUpdate for client"
+            ),
+        }
+    }
+
+    async fn broadcast_game_event_to_all_admins(&self, event_payload: GameEvent) {
+        match GenericServerToClientMessage::new_game_specific_event(
+            GAME_TYPE_ID_DND.to_string(),
+            &event_payload,
         ) {
             Ok(wrapped) => {
                 self.broadcast_generic_message_to_all_admins_internal(wrapped)
@@ -217,11 +224,46 @@ impl DealNoDealGame {
         }
     }
 
+    async fn broadcast_full_state_to_all_admins(&self) {
+        let mut state_for_client = self.clone();
+        state_for_client.prepare_for_client_view();
+        match GenericServerToClientMessage::new_game_specific_event(
+            GAME_TYPE_ID_DND.to_string(),
+            &serde_json::json!({
+                "event_type": "FullStateUpdate",
+                "data": state_for_client
+            }),
+        ) {
+            Ok(wrapped) => {
+                self.broadcast_generic_message_to_all_admins_internal(wrapped)
+                    .await
+            }
+            Err(e) => tracing::error!(
+                error = %e,
+                "Failed to serialize FullStateUpdate for broadcast"
+            ),
+        }
+    }
+
     async fn broadcast_full_state_update_internal(&mut self) {
         self.prepare_for_client_view();
         let state_clone_for_event = self.clone();
-        self.broadcast_game_event_to_all_admins(GameEvent::FullStateUpdate(state_clone_for_event))
-            .await;
+        match GenericServerToClientMessage::new_game_specific_event(
+            GAME_TYPE_ID_DND.to_string(),
+            &serde_json::json!({
+                "event_type": "FullStateUpdate",
+                "data": state_clone_for_event
+            }),
+        ) {
+            Ok(wrapped) => {
+                self.broadcast_generic_message_to_all_admins_internal(wrapped)
+                    .await
+            }
+            Err(e) => tracing::error!(
+                error = %e,
+                "Failed to serialize FullStateUpdate for broadcast"
+            ),
+        }
     }
 
     async fn send_generic_message_to_client_internal(
@@ -789,20 +831,7 @@ impl DealNoDealGame {
 impl GameLogic for DealNoDealGame {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         self.clients.insert(client_id, client_tx);
-        self.prepare_for_client_view();
-        let state_clone = self.clone();
-        if let Ok(wrapped_message) = GenericServerToClientMessage::new_game_specific_event(
-            GAME_TYPE_ID_DND.to_string(),
-            &GameEvent::FullStateUpdate(state_clone),
-        ) {
-            self.send_generic_message_to_client_internal(&client_id, wrapped_message)
-                .await;
-        } else {
-            tracing::error!(
-                client.id = %client_id,
-                "Failed to serialize FullStateUpdate for new client"
-            );
-        }
+        self.send_full_state_to_client(&client_id).await;
     }
 
     async fn client_disconnected(&mut self, client_id: Uuid) {
