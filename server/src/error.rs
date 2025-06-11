@@ -21,10 +21,6 @@ pub enum DbError {
     },
     #[error("Failed to fetch words from URL '{url}': {source}")]
     HttpFetch { url: String, source: reqwest::Error },
-    #[error("Word data is empty or invalid after fetch")]
-    EmptyOrInvalidData,
-    #[error("Word source type is 'None', no words loaded.")]
-    SourceIsNone,
 }
 
 #[derive(Debug, Error)]
@@ -35,8 +31,6 @@ pub enum AppError {
     Twitch(#[from] crate::twitch::TwitchError),
     #[error("Web server/handler error: {0}")]
     Web(#[from] crate::web::WebError),
-    #[error("Lobby system error: {0}")]
-    Lobby(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("HTTP client error: {0}")]
