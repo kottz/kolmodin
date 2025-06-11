@@ -10,6 +10,25 @@ use super::error::{Result as TwitchResult, TwitchError};
 use super::irc_parser::{IrcMessage, *};
 use super::types::TwitchChannelConnectionStatus;
 
+#[derive(Debug)]
+struct ConnectionConfig {
+    max_consecutive_auth_failures: u32,
+    base_backoff_seconds: u32,
+    max_backoff_seconds: u32,
+}
+
+struct ConnectionContext<'a> {
+    token_provider: &'a TokenProvider,
+    channel_name: &'a str,
+    actor_id_for_logging: Uuid,
+}
+
+#[derive(Debug)]
+struct ConnectionAttempt {
+    consecutive_auth_failures: u32,
+    reconnect_attempts: u32,
+}
+
 pub async fn run_irc_connection_loop(
     channel_name: String,
     actor_id_for_logging: Uuid,
@@ -67,18 +86,28 @@ pub async fn run_irc_connection_loop(
                 reconnect_attempts,
                 irc_server_url,
             ) => {
+                let config = ConnectionConfig {
+                    max_consecutive_auth_failures: MAX_CONSECUTIVE_AUTH_FAILURES,
+                    base_backoff_seconds: BASE_BACKOFF_SECONDS,
+                    max_backoff_seconds: MAX_BACKOFF_SECONDS,
+                };
+
+                let context = ConnectionContext {
+                    token_provider: &token_provider,
+                    channel_name: &channel_name,
+                    actor_id_for_logging,
+                };
+
+                let mut attempt = ConnectionAttempt {
+                    consecutive_auth_failures,
+                    reconnect_attempts,
+                };
+
                 let (reason_for_disconnect, delay_seconds, should_terminate_loop) =
-                    process_connection_result(
-                        connection_result,
-                        &mut consecutive_auth_failures,
-                        MAX_CONSECUTIVE_AUTH_FAILURES,
-                        &token_provider,
-                        &channel_name,
-                        actor_id_for_logging,
-                        reconnect_attempts,
-                        BASE_BACKOFF_SECONDS,
-                        MAX_BACKOFF_SECONDS,
-                    ).await;
+                    process_connection_result(connection_result, &mut attempt, &config, &context).await;
+
+                // Update the outer scope variables
+                consecutive_auth_failures = attempt.consecutive_auth_failures;
 
                 if let Err(e) = actor_tx.send(TwitchChannelActorMessage::InternalConnectionStatusChanged {
                     new_status: TwitchChannelConnectionStatus::Disconnected {
@@ -146,24 +175,19 @@ pub async fn run_irc_connection_loop(
 
 async fn process_connection_result(
     connection_result: TwitchResult<()>,
-    consecutive_auth_failures: &mut u32,
-    max_consecutive_auth_failures: u32,
-    token_provider: &TokenProvider,
-    channel_name: &str,
-    actor_id_for_logging: Uuid,
-    reconnect_attempts: u32,
-    base_backoff_seconds: u32,
-    max_backoff_seconds: u32,
+    attempt: &mut ConnectionAttempt,
+    config: &ConnectionConfig,
+    context: &ConnectionContext<'_>,
 ) -> (String, u32, bool) {
     // Calculate exponential backoff delay
     let calculate_backoff_delay = |attempts: u32| -> u32 {
-        let delay = base_backoff_seconds * 2_u32.pow(attempts.saturating_sub(1));
-        delay.min(max_backoff_seconds)
+        let delay = config.base_backoff_seconds * 2_u32.pow(attempts.saturating_sub(1));
+        delay.min(config.max_backoff_seconds)
     };
     match connection_result {
         Ok(()) => {
-            *consecutive_auth_failures = 0;
-            let backoff_delay = calculate_backoff_delay(reconnect_attempts);
+            attempt.consecutive_auth_failures = 0;
+            let backoff_delay = calculate_backoff_delay(attempt.reconnect_attempts);
             (
                 "Connection closed/ended gracefully. Will attempt to reconnect.".to_string(),
                 backoff_delay,
@@ -172,9 +196,9 @@ async fn process_connection_result(
         }
         Err(TwitchError::TwitchConnection(conn_msg)) => {
             tracing::warn!(
-                channel.name = %channel_name,
-                actor.id = %actor_id_for_logging,
-                attempt = *consecutive_auth_failures + 1,
+                channel.name = %context.channel_name,
+                actor.id = %context.actor_id_for_logging,
+                attempt = attempt.consecutive_auth_failures + 1,
                 error = %conn_msg,
                 "Connection attempt failed"
             );
@@ -184,45 +208,45 @@ async fn process_connection_result(
                 || conn_msg.contains(AUTH_ERROR_IMPROPERLY_FORMATTED)
                 || conn_msg.contains(AUTH_ERROR_INVALID_NICK)
             {
-                *consecutive_auth_failures += 1;
+                attempt.consecutive_auth_failures += 1;
 
-                if *consecutive_auth_failures < max_consecutive_auth_failures {
+                if attempt.consecutive_auth_failures < config.max_consecutive_auth_failures {
                     tracing::warn!(
-                        channel.name = %channel_name,
-                        actor.id = %actor_id_for_logging,
-                        consecutive_failures = *consecutive_auth_failures,
+                        channel.name = %context.channel_name,
+                        actor.id = %context.actor_id_for_logging,
+                        consecutive_failures = attempt.consecutive_auth_failures,
                         "Authentication failure detected. Signaling TokenProvider for immediate refresh"
                     );
-                    token_provider.signal_immediate_refresh();
+                    context.token_provider.signal_immediate_refresh();
 
                     tracing::debug!(
-                        channel.name = %channel_name,
-                        actor.id = %actor_id_for_logging,
+                        channel.name = %context.channel_name,
+                        actor.id = %context.actor_id_for_logging,
                         "Pausing briefly for potential token refresh before retrying connection"
                     );
                     tokio::time::sleep(Duration::from_secs(3)).await;
 
-                    let backoff_delay = calculate_backoff_delay(reconnect_attempts);
+                    let backoff_delay = calculate_backoff_delay(attempt.reconnect_attempts);
                     (conn_msg, backoff_delay, false)
                 } else {
                     tracing::error!(
-                        channel.name = %channel_name,
-                        actor.id = %actor_id_for_logging,
-                        max_failures = max_consecutive_auth_failures,
+                        channel.name = %context.channel_name,
+                        actor.id = %context.actor_id_for_logging,
+                        max_failures = config.max_consecutive_auth_failures,
                         "Reached max consecutive authentication failures. Terminating IRC loop for this channel"
                     );
                     (conn_msg, 0, true)
                 }
             } else {
-                *consecutive_auth_failures = 0;
-                let backoff_delay = calculate_backoff_delay(reconnect_attempts);
+                attempt.consecutive_auth_failures = 0;
+                let backoff_delay = calculate_backoff_delay(attempt.reconnect_attempts);
                 (conn_msg, backoff_delay, false)
             }
         }
         Err(TwitchError::TwitchAuth(other_auth_msg)) => {
             tracing::error!(
-                channel.name = %channel_name,
-                actor.id = %actor_id_for_logging,
+                channel.name = %context.channel_name,
+                actor.id = %context.actor_id_for_logging,
                 error = %other_auth_msg,
                 "Critical authentication problem. Terminating IRC loop"
             );
@@ -234,22 +258,22 @@ async fn process_connection_result(
         }
         Err(TwitchError::Io(io_error)) => {
             tracing::error!(
-                channel.name = %channel_name,
-                actor.id = %actor_id_for_logging,
+                channel.name = %context.channel_name,
+                actor.id = %context.actor_id_for_logging,
                 error = %io_error,
                 "I/O error in IRC connection"
             );
-            let backoff_delay = calculate_backoff_delay(reconnect_attempts);
+            let backoff_delay = calculate_backoff_delay(attempt.reconnect_attempts);
             (format!("I/O error: {}", io_error), backoff_delay, false)
         }
         Err(other_error) => {
             tracing::error!(
-                channel.name = %channel_name,
-                actor.id = %actor_id_for_logging,
+                channel.name = %context.channel_name,
+                actor.id = %context.actor_id_for_logging,
                 error = ?other_error,
                 "Unexpected error in IRC connection"
             );
-            let backoff_delay = calculate_backoff_delay(reconnect_attempts);
+            let backoff_delay = calculate_backoff_delay(attempt.reconnect_attempts);
             (
                 format!("Unexpected error: {:?}", other_error),
                 backoff_delay,
