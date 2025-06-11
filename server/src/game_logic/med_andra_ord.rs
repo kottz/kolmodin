@@ -12,6 +12,7 @@ use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
 };
+use crate::game_logic::utils::is_guess_acceptable;
 use crate::game_logic::{EventHandlingResult, GameLogic};
 use crate::twitch::ParsedTwitchMessage;
 
@@ -506,10 +507,9 @@ impl GameLogic for MedAndraOrdGameState {
                 return;
             }
 
-            let guess = message.text.trim().to_lowercase();
-            let target_word = current_word.to_lowercase();
+            let guess = message.text.trim();
 
-            if guess == target_word {
+            if is_guess_acceptable(current_word, guess) {
                 tracing::debug!(
                     guess = %guess,
                     player = %message.sender_username,

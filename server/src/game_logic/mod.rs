@@ -16,6 +16,8 @@ pub enum EventHandlingResult {
 pub mod messages;
 pub use messages::{ClientToServerMessage, ServerToClientMessage};
 
+pub mod utils;
+
 pub mod deal_no_deal;
 pub mod med_andra_ord;
 
