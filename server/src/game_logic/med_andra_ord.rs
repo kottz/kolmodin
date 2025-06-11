@@ -114,25 +114,6 @@ impl MedAndraOrdGameState {
         }
     }
 
-    async fn send_game_event_to_client(&self, client_id: &Uuid, event_payload: GameEvent) {
-        match GenericServerToClientMessage::new_game_specific_event(
-            GAME_TYPE_ID_MED_ANDRA_ORD.to_string(),
-            &event_payload,
-        ) {
-            Ok(wrapped_message) => {
-                self.send_generic_message_to_client(client_id, wrapped_message)
-                    .await;
-            }
-            Err(e) => {
-                tracing::error!(
-                    client.id = %client_id,
-                    error = %e,
-                    "Failed to serialize GameEvent for client"
-                );
-            }
-        }
-    }
-
     async fn broadcast_game_event_to_all(&self, event_payload: GameEvent) {
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_MED_ANDRA_ORD.to_string(),

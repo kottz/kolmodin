@@ -20,12 +20,9 @@ pub const RPL_WELCOME: &str = "001";
 // IRC Keywords
 pub const IRC_ACK: &str = "ACK";
 pub const IRC_NAK: &str = "NAK";
-pub const IRC_REQ: &str = "REQ";
-
 // Special IRC strings
 pub const IRC_WELCOME_TEXT: &str = ":Welcome";
 pub const HEALTH_CHECK_PING: &str = "PING :health-check";
-pub const HEALTH_CHECK_PONG_CONTENT: &str = ":health-check";
 
 // Twitch capabilities
 pub const TWITCH_CAPABILITIES: &str =

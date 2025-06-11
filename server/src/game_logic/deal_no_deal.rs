@@ -169,23 +169,6 @@ impl DealNoDealGame {
         self.banker_offer = offer;
     }
 
-    async fn send_game_event_to_client(&self, client_id: &Uuid, event_payload: GameEvent) {
-        match GenericServerToClientMessage::new_game_specific_event(
-            GAME_TYPE_ID_DND.to_string(),
-            &event_payload,
-        ) {
-            Ok(wrapped) => {
-                self.send_generic_message_to_client_internal(client_id, wrapped)
-                    .await
-            }
-            Err(e) => tracing::error!(
-                client.id = %client_id,
-                error = %e,
-                "Failed to serialize GameEvent for client"
-            ),
-        }
-    }
-
     async fn send_full_state_to_client(&self, client_id: &Uuid) {
         let mut state_for_client = self.clone();
         state_for_client.prepare_for_client_view();
@@ -220,27 +203,6 @@ impl DealNoDealGame {
             Err(e) => tracing::error!(
                 error = %e,
                 "Failed to serialize GameEvent for broadcast"
-            ),
-        }
-    }
-
-    async fn broadcast_full_state_to_all_admins(&self) {
-        let mut state_for_client = self.clone();
-        state_for_client.prepare_for_client_view();
-        match GenericServerToClientMessage::new_game_specific_event(
-            GAME_TYPE_ID_DND.to_string(),
-            &serde_json::json!({
-                "event_type": "FullStateUpdate",
-                "data": state_for_client
-            }),
-        ) {
-            Ok(wrapped) => {
-                self.broadcast_generic_message_to_all_admins_internal(wrapped)
-                    .await
-            }
-            Err(e) => tracing::error!(
-                error = %e,
-                "Failed to serialize FullStateUpdate for broadcast"
             ),
         }
     }
