@@ -41,8 +41,10 @@
 	});
 
 	async function handleCreateLobby(): Promise<void> {
-		if (!selectedGame || isProcessingCreation) {
+		if (!selectedGame || !twitchChannelLocalInput.trim() || isProcessingCreation) {
 			if (!selectedGame) notificationStore.add('Please select a game type.', 'warning');
+			if (!twitchChannelLocalInput.trim())
+				notificationStore.add('Please enter a Twitch channel name.', 'warning');
 			return;
 		}
 
@@ -53,7 +55,7 @@
 			// Step 1: Create lobby via HTTP
 			const lobbyDetailsFromApi: LobbyDetails = await lobbyService.createLobby(
 				selectedGame.id,
-				twitchChannelLocalInput.trim() || null
+				twitchChannelLocalInput.trim()
 			);
 			info('SelectGameScreen: API - Lobby created:', lobbyDetailsFromApi);
 
@@ -124,11 +126,9 @@
 	<Card class="w-full max-w-lg">
 		<CardHeader>
 			<CardTitle class="text-2xl">Create New Lobby</CardTitle>
-			<CardDescription>Select a game and optionally specify a Twitch channel.</CardDescription>
 		</CardHeader>
 		<CardContent class="space-y-6">
 			<div>
-				<h3 class="text-foreground mb-2 text-lg font-medium">Select Game Type:</h3>
 				{#if isLoadingGames}
 					<div
 						class="text-muted-foreground flex items-center justify-center rounded-md border border-dashed p-8"
@@ -146,10 +146,10 @@
 					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 						{#each availableGames as game (game.id)}
 							<Button
-								variant={selectedGame?.id === game.id ? 'default' : 'outline'}
-								class="h-auto justify-start p-4 text-left {selectedGame?.id === game.id
-									? 'ring-primary dark:ring-offset-background ring-2 ring-offset-2'
-									: ''}"
+								variant="outline"
+								class="h-auto justify-start border-2 p-4 text-left {selectedGame?.id === game.id
+									? 'border-foreground bg-muted/30 hover:border-foreground hover:bg-muted/30'
+									: 'hover:border-muted-foreground border-transparent hover:bg-transparent'}"
 								onclick={() => handleGameSelection(game)}
 								aria-pressed={selectedGame?.id === game.id}
 								disabled={isProcessingCreation}
@@ -168,19 +168,16 @@
 
 			<div>
 				<label for="twitch-channel" class="text-foreground mb-1 block text-sm font-medium"
-					>Twitch Channel <span class="text-muted-foreground text-xs">(Optional)</span></label
+					>Twitch Channel</label
 				>
 				<Input
 					id="twitch-channel"
 					type="text"
 					bind:value={twitchChannelLocalInput}
-					placeholder="your_twitch_channel_name"
+					placeholder="Enter channel name"
 					disabled={isProcessingCreation || isLoadingGames}
 					class="w-full"
 				/>
-				<p class="text-muted-foreground mt-1 text-xs">
-					If provided, the game will attempt to connect to this Twitch chat.
-				</p>
 			</div>
 
 			<div class="flex flex-col space-y-3 sm:flex-row sm:space-y-0 sm:space-x-3">
@@ -195,7 +192,10 @@
 				<Button
 					onclick={handleCreateLobby}
 					class="w-full sm:flex-1"
-					disabled={!selectedGame || isLoadingGames || isProcessingCreation}
+					disabled={!selectedGame ||
+						!twitchChannelLocalInput.trim() ||
+						isLoadingGames ||
+						isProcessingCreation}
 				>
 					{#if isProcessingCreation}
 						<Loader2 class="mr-2 h-5 w-5 animate-spin" />

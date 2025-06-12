@@ -16,11 +16,9 @@
 		<div>
 			<!-- You can add a logo or app icon here if you have one -->
 			<!-- <img class="mx-auto h-12 w-auto" src="/path/to/your/logo.svg" alt="App Logo" /> -->
-			<h1 class="text-foreground mt-6 text-3xl font-bold tracking-tight sm:text-4xl">
-				Game Admin Panel
-			</h1>
+			<h1 class="text-foreground mt-6 text-3xl font-bold tracking-tight sm:text-4xl">Kolmodin</h1>
 			<p class="text-md text-muted-foreground mt-3 sm:text-lg">
-				Welcome! Create a new game lobby to get started.
+				Interactive multiplayer games with your Twitch chat. Create a lobby to get started.
 			</p>
 		</div>
 
