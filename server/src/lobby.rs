@@ -7,10 +7,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::config::GamesConfig;
+use crate::config::{AppSettings, GamesConfig};
 use crate::db::WordListManager;
 use crate::game_logic::{
-    DealNoDealGame, GameLogic, MedAndraOrdGameState, ServerToClientMessage,
+    ClipQueueGame, DealNoDealGame, GameLogic, MedAndraOrdGameState, ServerToClientMessage,
     messages as game_messages,
 };
 use crate::twitch::{
@@ -48,6 +48,7 @@ pub struct LobbyManagerActor {
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     games_config: GamesConfig,
     word_list_manager: Arc<WordListManager>,
+    app_settings: Arc<AppSettings>,
 }
 
 impl LobbyManagerActor {
@@ -57,6 +58,7 @@ impl LobbyManagerActor {
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
         word_list_manager: Arc<WordListManager>,
+        app_settings: Arc<AppSettings>,
     ) -> Self {
         LobbyManagerActor {
             receiver,
@@ -65,6 +67,7 @@ impl LobbyManagerActor {
             twitch_chat_manager_handle,
             games_config,
             word_list_manager,
+            app_settings,
         }
     }
 
@@ -157,6 +160,42 @@ impl LobbyManagerActor {
                         let game_engine = MedAndraOrdGameState::new(mao_words);
                         actual_game_type_created = game_engine.game_type_id();
                         lobby_actor_handle = LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
+                            lobby_id,
+                            32,
+                            manager_handle.clone(),
+                            game_engine,
+                            requested_twitch_channel.clone(),
+                            self.twitch_chat_manager_handle.clone(),
+                        );
+                    }
+                    "clipqueue" | "queue" => {
+                        if !self.games_config.enabled_types.contains("clipqueue") {
+                            tracing::error!(
+                                lobby.id = %lobby_id,
+                                game.type = "clipqueue",
+                                "Game type not enabled"
+                            );
+                            let _ = respond_to
+                                .send(Err("Game type 'clipqueue' is not enabled.".to_string()));
+                            return;
+                        }
+
+                        // Check if YouTube API is configured for ClipQueue
+                        if self.app_settings.youtube.is_none() {
+                            tracing::error!(
+                                lobby.id = %lobby_id,
+                                game.type = "clipqueue",
+                                "YouTube API not configured for ClipQueue game"
+                            );
+                            let _ = respond_to.send(Err(
+                                "ClipQueue requires YouTube API configuration. Please set KOLMODIN__YOUTUBE__API_KEY environment variable.".to_string()
+                            ));
+                            return;
+                        }
+
+                        let game_engine = ClipQueueGame::new(self.app_settings.clone());
+                        actual_game_type_created = game_engine.game_type_id();
+                        lobby_actor_handle = LobbyActorHandle::new_spawned::<ClipQueueGame>(
                             lobby_id,
                             32,
                             manager_handle.clone(),
@@ -262,6 +301,7 @@ impl LobbyManagerHandle {
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
         word_list_manager: Arc<WordListManager>,
+        app_settings: Arc<AppSettings>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
         let actor = LobbyManagerActor::new(
@@ -270,6 +310,7 @@ impl LobbyManagerHandle {
             twitch_chat_manager_handle,
             games_config,
             word_list_manager,
+            app_settings,
         );
         let handle = Self {
             sender: sender.clone(),

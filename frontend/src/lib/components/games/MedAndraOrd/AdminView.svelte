@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Checkbox from '$lib/components/ui/checkbox.svelte';
+	import Label from '$lib/components/ui/label.svelte';
 	import StreamControls from '$lib/components/ui/StreamControls.svelte';
 	import {
 		Card,
@@ -122,12 +123,18 @@
 						{#if currentPhase === 'Setup'}
 							<!-- Point Limit Settings -->
 							<div class="space-y-3">
-								<Checkbox
-									id="point-limit-enabled"
-									label="Point Limit"
-									bind:checked={pointLimitEnabled}
-									onCheckedChange={handlePointLimitToggle}
-								/>
+								<div class="flex items-center gap-2">
+									<Checkbox
+										id="point-limit-enabled"
+										bind:checked={pointLimitEnabled}
+										onCheckedChange={handlePointLimitToggle}
+									/>
+									<Label for="point-limit-enabled">
+										{#snippet children()}
+											Point Limit
+										{/snippet}
+									</Label>
+								</div>
 								<div class="space-y-2">
 									<Input
 										id="target-points"
@@ -143,12 +150,18 @@
 
 							<!-- Time Limit Settings -->
 							<div class="space-y-3">
-								<Checkbox
-									id="time-limit-enabled"
-									label="Game Time Limit"
-									bind:checked={timeLimitEnabled}
-									onCheckedChange={handleTimeLimitToggle}
-								/>
+								<div class="flex items-center gap-2">
+									<Checkbox
+										id="time-limit-enabled"
+										bind:checked={timeLimitEnabled}
+										onCheckedChange={handleTimeLimitToggle}
+									/>
+									<Label for="time-limit-enabled">
+										{#snippet children()}
+											Game Time Limit
+										{/snippet}
+									</Label>
+								</div>
 								<div class="space-y-2">
 									<Input
 										id="game-duration"

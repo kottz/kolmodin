@@ -68,6 +68,7 @@ async fn main() -> AppResult<()> {
         twitch_chat_manager_handle.clone(),
         app_settings.games.clone(),
         Arc::clone(&word_list_manager),
+        Arc::new(app_settings.clone()),
     );
     tracing::info!("LobbyManagerActor created");
 

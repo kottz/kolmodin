@@ -6,13 +6,15 @@
 
 	import DealNoDealAdminView from '$lib/components/games/DealNoDeal/AdminView.svelte';
 	import MedAndraOrdAdminView from '$lib/components/games/MedAndraOrd/AdminView.svelte';
+	import ClipQueueAdminView from '$lib/components/games/ClipQueue/AdminView.svelte';
 	// Optional shared components (ensure they exist or comment out)
 	// import GameLog from '$lib/components/shared/GameLog.svelte';
 	// import LatestGameEventDisplay from '$lib/components/shared/LatestGameEventDisplay.svelte';
 
 	const gameComponentMap = {
 		DealNoDeal: DealNoDealAdminView,
-		MedAndraOrd: MedAndraOrdAdminView
+		MedAndraOrd: MedAndraOrdAdminView,
+		ClipQueue: ClipQueueAdminView
 	};
 
 	// Define a more general type for component constructors if you have many

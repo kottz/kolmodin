@@ -26,6 +26,11 @@ export const lobbyService = {
 				name: 'Med Andra Ord',
 				description:
 					'Swedish word guessing game where the admin describes words and players guess them in chat'
+			},
+			{
+				id: 'ClipQueue',
+				name: 'Clip Queue',
+				description: 'Community-driven YouTube clip watching with Twitch chat submissions.'
 			}
 			// Add other game types your server supports by their game_type_id
 		]);

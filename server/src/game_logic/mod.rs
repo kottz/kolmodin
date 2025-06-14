@@ -18,9 +18,11 @@ pub use messages::{ClientToServerMessage, ServerToClientMessage};
 
 pub mod utils;
 
+pub mod clip_queue;
 pub mod deal_no_deal;
 pub mod med_andra_ord;
 
+pub use clip_queue::ClipQueueGame;
 pub use deal_no_deal::DealNoDealGame;
 pub use med_andra_ord::MedAndraOrdGameState;
 
@@ -28,11 +30,16 @@ pub use med_andra_ord::MedAndraOrdGameState;
 pub enum GameType {
     DealNoDeal,
     MedAndraOrd,
+    ClipQueue,
 }
 
 impl GameType {
     pub fn all() -> Vec<Self> {
-        let game_types = vec![GameType::DealNoDeal, GameType::MedAndraOrd];
+        let game_types = vec![
+            GameType::DealNoDeal,
+            GameType::MedAndraOrd,
+            GameType::ClipQueue,
+        ];
 
         // Compile-time assertion: this should never be empty
         debug_assert!(
@@ -47,6 +54,7 @@ impl GameType {
         match self {
             GameType::DealNoDeal => &["dealnodeal", "dealornodeal"],
             GameType::MedAndraOrd => &["medandraord", "medandra", "ord"],
+            GameType::ClipQueue => &["clipqueue", "queue"],
         }
     }
 

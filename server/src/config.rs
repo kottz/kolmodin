@@ -84,12 +84,26 @@ pub struct DatabaseConfig {
     pub http_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
+pub struct YouTubeConfig {
+    pub api_key: String,
+}
+
+impl std::fmt::Debug for YouTubeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YouTubeConfig")
+            .field("api_key", &"***REDACTED***")
+            .finish()
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct AppSettings {
     pub server: ServerConfig,
     pub twitch: TwitchConfig,
     pub games: GamesConfig,
     pub database: DatabaseConfig,
+    pub youtube: Option<YouTubeConfig>,
 }
 
 #[tracing::instrument]
