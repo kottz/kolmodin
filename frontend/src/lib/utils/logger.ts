@@ -7,8 +7,8 @@ type LogConfig = {
 };
 
 const config: LogConfig = {
-	level: import.meta.env.DEV ? 'debug' : 'info', // Default to debug in dev, info in prod
-	enabled: true // Always enabled, level controls output
+	level: 'debug',
+	enabled: import.meta.env.DEV
 };
 
 const LOG_LEVELS = {
