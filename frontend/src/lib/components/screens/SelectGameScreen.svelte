@@ -24,6 +24,32 @@
 	let isLoadingGames = $state(true);
 	let isProcessingCreation = $state(false);
 
+	// localStorage key for saving the last used channel name
+	const CHANNEL_STORAGE_KEY = 'kolmodin_last_twitch_channel';
+
+	// Load saved channel name from localStorage
+	function loadSavedChannelName(): void {
+		try {
+			const savedChannel = localStorage.getItem(CHANNEL_STORAGE_KEY);
+			if (savedChannel && savedChannel.trim()) {
+				twitchChannelLocalInput = savedChannel.trim();
+				info('SelectGameScreen: Loaded saved channel name:', savedChannel);
+			}
+		} catch (err) {
+			warn('SelectGameScreen: Failed to load saved channel name from localStorage:', err);
+		}
+	}
+
+	// Save channel name to localStorage
+	function saveChannelName(channelName: string): void {
+		try {
+			localStorage.setItem(CHANNEL_STORAGE_KEY, channelName.trim());
+			info('SelectGameScreen: Saved channel name to localStorage:', channelName);
+		} catch (err) {
+			warn('SelectGameScreen: Failed to save channel name to localStorage:', err);
+		}
+	}
+
 	$effect(() => {
 		async function loadGames() {
 			info('SelectGameScreen: Fetching available games...');
@@ -37,6 +63,10 @@
 				isLoadingGames = false;
 			}
 		}
+
+		// Load saved channel name when component loads
+		loadSavedChannelName();
+
 		if (isLoadingGames) loadGames();
 	});
 
@@ -62,17 +92,15 @@
 			// Step 2: Update lobbyStore with details from API.
 			// This is still good for other parts of the app to react to lobby state.
 			lobbyStore.setLobbyDetails(lobbyDetailsFromApi);
-			notificationStore.add(
-				`Lobby for "${selectedGame.name}" created! Connecting...`,
-				'info',
-				4000
-			);
 
 			// Step 3: Connect to WebSocket, awaiting the promise from websocketStore
 			await websocketStore.connect(lobbyDetailsFromApi.lobby_id);
 
 			// If connect resolves, WebSocket is application-level connected.
 			info('SelectGameScreen: WebSocket connected successfully.');
+
+			// Step 3.5: Save the successful channel name to localStorage
+			saveChannelName(twitchChannelLocalInput.trim());
 
 			// Step 4: Navigate to game screen
 			// **** USE THE DIRECT VALUE FROM lobbyDetailsFromApi ****
@@ -94,14 +122,27 @@
 				lobbyStore.cleanupLobbyState(true); // Attempt cleanup
 			}
 		} catch (err) {
-			// ... (error handling remains the same) ...
 			warn('SelectGameScreen: Error during lobby creation or WebSocket connection.', err);
 			let errorMessage = 'Failed to start the game session.';
+
 			if (isApiError(err)) {
 				errorMessage = `Lobby creation error: ${err.message || 'Failed to create lobby.'}`;
 			} else if (err instanceof Error) {
 				errorMessage = `Connection error: ${err.message || 'Could not connect to game server.'}`;
+			} else if (typeof err === 'string') {
+				errorMessage = `Error: ${err}`;
+			} else if (err && typeof err === 'object') {
+				// Handle objects that might have message, error, or other properties
+				const errorObj = err as Record<string, unknown>;
+				if (errorObj.message && typeof errorObj.message === 'string') {
+					errorMessage = `Error: ${errorObj.message}`;
+				} else if (errorObj.error && typeof errorObj.error === 'string') {
+					errorMessage = `Error: ${errorObj.error}`;
+				} else {
+					errorMessage = 'An unexpected error occurred while starting the game session.';
+				}
 			}
+
 			notificationStore.add(errorMessage, 'destructive');
 
 			if (lobbyStore.state.isLobbyActive) {
