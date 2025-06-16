@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { fade, fly, scale, blur } from 'svelte/transition';
-	import { quintOut, elasticOut } from 'svelte/easing';
 	import type { DealNoDealPublicState } from './types';
 	import type { StreamDisplayConfig } from '$lib/types/stream.types';
+	import DealVotingView from './components/DealVotingView.svelte';
+	import GameOverView from './components/GameOverView.svelte';
 
 	interface Props {
 		gameState: DealNoDealPublicState;
@@ -11,69 +11,11 @@
 
 	let { gameState, displayConfig }: Props = $props();
 
-	function getPhaseTitle(phase: string): string {
-		switch (phase) {
-			case 'Setup':
-				return 'Setting Up The Game';
-			case 'PlayerCaseSelectionVoting':
-				return 'Choose Your Case!';
-			case 'RoundCaseOpeningVoting':
-				return 'Opening Cases...';
-			case 'BankerOfferCalculation':
-				return 'Banker is Calculating...';
-			case 'DealOrNoDealVoting':
-				return 'Deal or No Deal?';
-			case 'SwitchOrKeepVoting':
-				return 'Switch or Keep?';
-			case 'GameOver':
-				return 'Final Reveal!';
-			default:
-				return 'Deal or No Deal';
-		}
-	}
-
-	function getPhaseEmoji(phase: string): string {
-		switch (phase) {
-			case 'Setup':
-				return '⚙️';
-			case 'PlayerCaseSelectionVoting':
-				return '🎯';
-			case 'RoundCaseOpeningVoting':
-				return '📦';
-			case 'BankerOfferCalculation':
-				return '🏦';
-			case 'DealOrNoDealVoting':
-				return '🤝';
-			case 'SwitchOrKeepVoting':
-				return '🔄';
-			case 'GameOver':
-				return '💰';
-			default:
-				return '🎮';
-		}
-	}
+	// displayConfig can be used for future customization - currently unused
+	void displayConfig;
 
 	function formatMoney(amount: number): string {
 		return '$' + amount.toLocaleString();
-	}
-
-	function getMoneyColor(amount: number): string {
-		if (amount >= 100000) return 'text-red-400'; // High amounts in red
-		if (amount >= 10000) return 'text-yellow-400'; // Medium amounts in yellow
-		return 'text-blue-400'; // Low amounts in blue
-	}
-
-	function getVoteColor(voteType: 'DEAL' | 'NO DEAL' | 'SWITCH' | 'KEEP'): string {
-		switch (voteType) {
-			case 'DEAL':
-				return 'from-green-500 to-emerald-600';
-			case 'NO DEAL':
-				return 'from-red-500 to-rose-600';
-			case 'SWITCH':
-				return 'from-blue-500 to-cyan-600';
-			case 'KEEP':
-				return 'from-purple-500 to-violet-600';
-		}
 	}
 
 	// Derived states
@@ -83,15 +25,13 @@
 		gameState.phase.type === 'DealOrNoDealVoting' ? gameState.phase.data?.offer : null
 	);
 	const isGameOver = $derived(gameState.phase.type === 'GameOver');
-	const totalCases = $derived(gameState.briefcases?.length || 0);
-	const openedCases = $derived(gameState.briefcases?.filter((c) => c.isOpened).length || 0);
 
-	// Group money values into columns like the admin view
+	// Group money values into columns like the admin view - use all money values
 	const moneyBoardColumns = $derived(() => {
-		if (!gameState.remainingMoneyValues || gameState.remainingMoneyValues.length === 0) {
+		if (!gameState.allMoneyValues || gameState.allMoneyValues.length === 0) {
 			return { left: [], right: [] };
 		}
-		const sortedValues = [...gameState.remainingMoneyValues].sort((a, b) => a - b);
+		const sortedValues = [...gameState.allMoneyValues].sort((a, b) => a - b);
 		const midpoint = Math.ceil(sortedValues.length / 2);
 		return {
 			left: sortedValues.slice(0, midpoint),
@@ -119,7 +59,7 @@
 	<!-- Money Rain Animation for Big Reveals -->
 	{#if isGameOver}
 		<div class="pointer-events-none absolute inset-0">
-			{#each Array(20) as _, i (i)}
+			{#each Array.from({ length: 20 }, (_, i) => i) as coinIndex (coinIndex)}
 				<div
 					class="absolute animate-bounce text-4xl"
 					style="left: {Math.random() * 100}%; animation-delay: {Math.random() *
@@ -133,294 +73,247 @@
 
 	<!-- Main Content -->
 	<div class="relative z-10 flex h-full flex-col">
-		<!-- Header -->
-		<header class="px-6 py-6 text-center">
-			<div
-				class="mb-4 text-6xl"
-				class:animate-bounce={gameState.phase.type === 'BankerOfferCalculation'}
-				transition:scale={{ duration: 500, easing: quintOut }}
-			>
-				{getPhaseEmoji(gameState.phase.type)}
-			</div>
-			<h1
-				class="mb-2 text-5xl font-bold tracking-wide text-white"
-				transition:fade={{ duration: 300 }}
-			>
-				Deal or No Deal
-			</h1>
-			<h2 class="text-2xl font-medium text-white/90" transition:fly={{ y: 20, duration: 400 }}>
-				{getPhaseTitle(gameState.phase.type)}
-			</h2>
-		</header>
-
-		<!-- Main Content Area -->
-		<div class="grid flex-1 grid-cols-1 gap-6 px-6 pb-6 lg:grid-cols-3">
-			<!-- Left Column: Money Board -->
-			{#if isPlaying && gameState.remainingMoneyValues && gameState.remainingMoneyValues.length > 0}
-				<div
-					class="rounded-2xl bg-black/30 p-6 backdrop-blur-sm"
-					transition:fly={{ x: -50, duration: 500 }}
-				>
-					<h3 class="mb-4 text-center text-xl font-bold text-white">💰 Money Board 💰</h3>
-					<div class="grid grid-cols-2 gap-2 text-lg">
-						<!-- Left Column -->
-						<div class="space-y-2">
-							{#each moneyBoardColumns().left as amount (amount)}
-								<div
-									class="rounded-lg px-3 py-2 text-center font-bold transition-all duration-300 {gameState.remainingMoneyValues.includes(
-										amount
-									)
-										? 'bg-white/20 text-white'
-										: 'bg-red-900/50 text-gray-400 line-through opacity-50'}"
-								>
-									{formatMoney(amount)}
-								</div>
-							{/each}
+		<!-- Top Information Bar -->
+		<div class="bg-black/40 p-4 backdrop-blur-sm">
+			<div class="flex items-center justify-between">
+				<!-- Phase Information -->
+				<div class="text-white">
+					{#if gameState.phase.type === 'Setup'}
+						<div class="flex items-center gap-3">
+							<div class="animate-spin text-2xl">⚙️</div>
+							<span class="text-xl font-bold">Setting Up Game</span>
 						</div>
-						<!-- Right Column -->
-						<div class="space-y-2">
-							{#each moneyBoardColumns().right as amount (amount)}
-								<div
-									class="rounded-lg px-3 py-2 text-center font-bold transition-all duration-300 {gameState.remainingMoneyValues.includes(
-										amount
-									)
-										? 'bg-white/20 text-white'
-										: 'bg-red-900/50 text-gray-400 line-through opacity-50'}"
-								>
-									{formatMoney(amount)}
-								</div>
-							{/each}
+					{:else if gameState.phase.type === 'PlayerCaseSelectionVoting'}
+						<div class="flex items-center gap-3">
+							<div class="animate-pulse text-2xl">🎯</div>
+							<span class="text-xl font-bold">Choose Your Case!</span>
 						</div>
-					</div>
-				</div>
-			{/if}
-
-			<!-- Center Column: Main Action -->
-			<div
-				class="flex flex-col justify-center rounded-2xl bg-black/30 p-6 backdrop-blur-sm"
-				class:lg:col-span-2={!isPlaying}
-				transition:fly={{ y: 30, duration: 500 }}
-			>
-				{#if gameState.phase.type === 'Setup'}
-					<!-- Setup Phase -->
-					<div class="space-y-6 text-center">
-						<div class="animate-spin text-8xl">⚙️</div>
-						<h3 class="text-3xl font-bold text-white">Setting Up Game</h3>
-						<p class="text-lg text-white/80">Get ready for the ultimate game of risk and reward!</p>
-						<div class="space-y-2 text-white/60">
-							<p>📦 {totalCases} briefcases with hidden amounts</p>
-							<p>🏦 The banker will make offers</p>
-							<p>🎯 Will you take the deal or risk it all?</p>
+					{:else if gameState.phase.type === 'RoundCaseOpeningVoting'}
+						<div class="flex items-center gap-3">
+							<div class="animate-bounce text-2xl">📦</div>
+							<span class="text-xl font-bold">Opening Cases...</span>
+							{#if gameState.phase.data}
+								<span class="text-white/80">
+									({gameState.phase.data.opened_so_far_for_round || 0} / {gameState.phase.data
+										.total_to_open_for_round || 0})
+								</span>
+							{/if}
 						</div>
-					</div>
-				{:else if gameState.phase.type === 'PlayerCaseSelectionVoting'}
-					<!-- Case Selection Phase -->
-					<div class="space-y-6 text-center">
-						<div class="animate-pulse text-7xl">🎯</div>
-						<h3 class="text-3xl font-bold text-white">Choose Your Lucky Case!</h3>
-						<p class="text-lg text-white/90">
-							One of these briefcases could contain the big money...
-						</p>
-						{#if hasPlayerCase}
-							<div
-								class="rounded-xl bg-yellow-500/20 p-4"
-								transition:scale={{ duration: 500, easing: elasticOut }}
-							>
-								<p class="text-xl font-bold text-yellow-300">
-									Case #{(gameState.playerChosenCaseIndex || 0) + 1} Selected!
-								</p>
-								<p class="text-white/80">Your fate is sealed in this case...</p>
-							</div>
-						{/if}
-					</div>
-				{:else if gameState.phase.type === 'RoundCaseOpeningVoting'}
-					<!-- Case Opening Phase -->
-					<div class="space-y-6 text-center">
-						<div class="animate-bounce text-7xl">📦</div>
-						<h3 class="text-3xl font-bold text-white">Opening Cases...</h3>
-						{#if gameState.phase.data}
-							<div class="text-xl text-white/90">
-								{gameState.phase.data.opened_so_far_for_round || 0} / {gameState.phase.data
-									.total_to_open_for_round || 0}
-								cases opened this round
-							</div>
-							<div class="rounded-xl bg-white/10 p-4">
-								<div class="h-4 overflow-hidden rounded-full bg-gray-700">
-									<div
-										class="h-full bg-gradient-to-r from-blue-500 to-green-500 transition-all duration-500"
-										style="width: {((gameState.phase.data.opened_so_far_for_round || 0) /
-											(gameState.phase.data.total_to_open_for_round || 1)) *
-											100}%"
-									></div>
-								</div>
-							</div>
-						{/if}
-						<p class="text-white/80">Eliminating amounts from the board...</p>
-					</div>
-				{:else if gameState.phase.type === 'BankerOfferCalculation'}
-					<!-- Banker Calculating -->
-					<div class="space-y-6 text-center">
-						<div class="animate-bounce text-7xl">🏦</div>
-						<h3 class="text-3xl font-bold text-white">Banker is Calculating...</h3>
-						<div class="flex justify-center">
-							<div class="rounded-xl bg-white/10 p-6">
-								<div class="mb-4 animate-spin text-4xl">💭</div>
-								<p class="text-white/90">The banker is reviewing the remaining amounts</p>
-								<p class="text-white/70">An offer is coming...</p>
-							</div>
+					{:else if gameState.phase.type === 'BankerOfferCalculation'}
+						<div class="flex items-center gap-3">
+							<div class="animate-bounce text-2xl">🏦</div>
+							<span class="text-xl font-bold">Banker is Calculating...</span>
 						</div>
-					</div>
-				{:else if gameState.phase.type === 'DealOrNoDealVoting'}
-					<!-- Deal or No Deal Decision -->
-					<div class="space-y-6 text-center">
-						<div class="animate-pulse text-7xl">🤝</div>
-						<h3 class="text-3xl font-bold text-white">Deal or No Deal?</h3>
-						{#if bankerOffer}
-							<div
-								class="to-gold-500/20 rounded-2xl bg-gradient-to-r from-yellow-500/20 p-6"
-								transition:scale={{ duration: 500, easing: elasticOut }}
-							>
-								<p class="mb-2 text-lg text-white/90">Banker's Offer:</p>
-								<p class="text-5xl font-bold text-yellow-300">{formatMoney(bankerOffer)}</p>
-							</div>
-						{/if}
-
-						{#if gameState.voteCounts}
-							<div class="grid grid-cols-2 gap-4">
-								<!-- Deal Votes -->
-								<div class="rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-600/20 p-4">
-									<h4 class="mb-2 text-xl font-bold text-green-300">✅ DEAL</h4>
-									<p class="text-2xl font-bold text-white">{gameState.voteCounts.DEAL || 0}</p>
-									<p class="text-sm text-green-200">Take the money!</p>
-								</div>
-
-								<!-- No Deal Votes -->
-								<div class="rounded-xl bg-gradient-to-br from-red-500/20 to-rose-600/20 p-4">
-									<h4 class="mb-2 text-xl font-bold text-red-300">❌ NO DEAL</h4>
-									<p class="text-2xl font-bold text-white">
-										{gameState.voteCounts['NO DEAL'] || 0}
-									</p>
-									<p class="text-sm text-red-200">Keep playing!</p>
-								</div>
-							</div>
-						{/if}
-					</div>
-				{:else if gameState.phase.type === 'SwitchOrKeepVoting'}
-					<!-- Switch or Keep Decision -->
-					<div class="space-y-6 text-center">
-						<div class="animate-pulse text-7xl">🔄</div>
-						<h3 class="text-3xl font-bold text-white">Final Decision!</h3>
-						<div class="rounded-xl bg-white/10 p-6">
-							<p class="mb-4 text-lg text-white/90">Your case vs. the final case:</p>
-							<div class="grid grid-cols-2 gap-4">
-								<div class="rounded-lg bg-blue-500/20 p-4">
-									<p class="font-bold text-blue-300">Your Case</p>
-									<p class="text-2xl">#{(gameState.playerChosenCaseIndex || 0) + 1}</p>
-								</div>
-								<div class="rounded-lg bg-purple-500/20 p-4">
-									<p class="font-bold text-purple-300">Final Case</p>
-									<p class="text-2xl">
-										#{gameState.phase.data?.final_case_index
-											? gameState.phase.data.final_case_index + 1
-											: '?'}
-									</p>
-								</div>
-							</div>
+					{:else if gameState.phase.type === 'DealOrNoDealVoting'}
+						<div class="flex items-center gap-3">
+							<div class="animate-pulse text-2xl">🤝</div>
+							<span class="text-xl font-bold">Deal or No Deal?</span>
 						</div>
-
-						{#if gameState.voteCounts}
-							<div class="grid grid-cols-2 gap-4">
-								<!-- Switch Votes -->
-								<div class="rounded-xl bg-gradient-to-br from-blue-500/20 to-cyan-600/20 p-4">
-									<h4 class="mb-2 text-xl font-bold text-blue-300">🔄 SWITCH</h4>
-									<p class="text-2xl font-bold text-white">{gameState.voteCounts.SWITCH || 0}</p>
-								</div>
-
-								<!-- Keep Votes -->
-								<div class="rounded-xl bg-gradient-to-br from-purple-500/20 to-violet-600/20 p-4">
-									<h4 class="mb-2 text-xl font-bold text-purple-300">🛡️ KEEP</h4>
-									<p class="text-2xl font-bold text-white">{gameState.voteCounts.KEEP || 0}</p>
-								</div>
-							</div>
-						{/if}
-					</div>
-				{:else if gameState.phase.type === 'GameOver'}
-					<!-- Game Over -->
-					<div class="space-y-6 text-center">
-						<div class="animate-bounce text-8xl">💰</div>
-						<h3 class="text-4xl font-bold text-white">Final Reveal!</h3>
-						{#if gameState.phase.data}
-							<div
-								class="to-gold-500/20 rounded-2xl bg-gradient-to-r from-yellow-500/20 p-8"
-								transition:scale={{ duration: 800, easing: elasticOut }}
-							>
-								<p class="mb-4 text-2xl text-white/90">Final Winnings:</p>
-								<p class="mb-4 text-6xl font-bold text-yellow-300">
+					{:else if gameState.phase.type === 'SwitchOrKeepVoting'}
+						<div class="flex items-center gap-3">
+							<div class="animate-pulse text-2xl">🔄</div>
+							<span class="text-xl font-bold">Switch or Keep?</span>
+						</div>
+					{:else if gameState.phase.type === 'GameOver'}
+						<div class="flex items-center gap-3">
+							<div class="animate-bounce text-2xl">💰</div>
+							<span class="text-xl font-bold">Final Reveal!</span>
+							{#if gameState.phase.data}
+								<span class="font-bold text-yellow-300">
 									{formatMoney(gameState.phase.data.winnings || 0)}
-								</p>
-								{#if gameState.phase.data.player_case_original_value}
-									<p class="text-lg text-white/80">
-										Your case actually contained: {formatMoney(
-											gameState.phase.data.player_case_original_value
-										)}
-									</p>
-								{/if}
+								</span>
+							{/if}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Current Offer or Player Case -->
+				<div class="text-white">
+					{#if bankerOffer}
+						<div class="rounded-lg bg-yellow-500/20 p-3">
+							<span class="text-sm text-yellow-200">Banker's Offer:</span>
+							<div class="text-xl font-bold text-yellow-300">{formatMoney(bankerOffer)}</div>
+						</div>
+					{:else if hasPlayerCase}
+						<div class="rounded-lg bg-blue-500/20 p-3">
+							<span class="text-sm text-blue-200">Your Case:</span>
+							<div class="text-xl font-bold text-blue-300">
+								#{(gameState.playerChosenCaseIndex || 0) + 1}
 							</div>
-						{/if}
-						<p class="text-xl text-white/90">
-							{gameState.phase.data?.winnings && gameState.phase.data.winnings > 0
-								? '🎉 Congratulations! 🎉'
-								: 'Better luck next time!'}
-						</p>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Vote Counts for Decision Phases -->
+				{#if gameState.phase.type === 'DealOrNoDealVoting' && gameState.voteCounts}
+					<div class="flex gap-4">
+						<div class="rounded-lg bg-green-500/20 p-2 text-center">
+							<div class="text-xs text-green-200">DEAL</div>
+							<div class="text-lg font-bold text-white">{gameState.voteCounts.DEAL || 0}</div>
+						</div>
+						<div class="rounded-lg bg-red-500/20 p-2 text-center">
+							<div class="text-xs text-red-200">NO DEAL</div>
+							<div class="text-lg font-bold text-white">{gameState.voteCounts['NO DEAL'] || 0}</div>
+						</div>
+					</div>
+				{:else if gameState.phase.type === 'SwitchOrKeepVoting' && gameState.voteCounts}
+					<div class="flex gap-4">
+						<div class="rounded-lg bg-blue-500/20 p-2 text-center">
+							<div class="text-xs text-blue-200">SWITCH</div>
+							<div class="text-lg font-bold text-white">{gameState.voteCounts.SWITCH || 0}</div>
+						</div>
+						<div class="rounded-lg bg-purple-500/20 p-2 text-center">
+							<div class="text-xs text-purple-200">KEEP</div>
+							<div class="text-lg font-bold text-white">{gameState.voteCounts.KEEP || 0}</div>
+						</div>
 					</div>
 				{/if}
 			</div>
+		</div>
 
-			<!-- Right Column: Game Status -->
-			{#if isPlaying && gameState.phase.type !== 'Setup'}
-				<div
-					class="rounded-2xl bg-black/30 p-6 backdrop-blur-sm"
-					transition:fly={{ x: 50, duration: 500 }}
-				>
-					<h3 class="mb-4 text-center text-xl font-bold text-white">📊 Game Status</h3>
-					<div class="space-y-4">
-						{#if hasPlayerCase}
-							<div class="rounded-lg bg-yellow-500/20 p-3">
-								<p class="text-sm text-white/80">Your Case:</p>
-								<p class="text-2xl font-bold text-yellow-300">
-									#{(gameState.playerChosenCaseIndex || 0) + 1}
-								</p>
+		<!-- Main Game Area: Money Board Left, Briefcases Right -->
+		{#if isPlaying}
+			<div class="flex flex-1 gap-6 p-6">
+				<!-- Left: Money Board -->
+				<div class="w-1/3">
+					<div class="h-full rounded-2xl bg-black/30 p-6 backdrop-blur-sm">
+						<h3 class="mb-4 text-center text-xl font-bold text-white">💰 Money Board 💰</h3>
+						{#if moneyBoardColumns().left.length > 0}
+							<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-lg">
+								<div class="flex flex-col space-y-1.5">
+									{#each moneyBoardColumns().left as moneyValue (moneyValue)}
+										{@const isActive = gameState.remainingMoneyValues?.includes(moneyValue)}
+										<div
+											class="rounded px-2 py-1.5 text-center font-medium shadow-sm
+											{isActive
+												? moneyValue >= 100000
+													? 'bg-red-500 text-white'
+													: 'bg-blue-500 text-white'
+												: 'bg-gray-700 text-gray-400 line-through opacity-60'}"
+										>
+											{formatMoney(moneyValue)}
+										</div>
+									{/each}
+								</div>
+								<div class="flex flex-col space-y-1.5">
+									{#each moneyBoardColumns().right as moneyValue (moneyValue)}
+										{@const isActive = gameState.remainingMoneyValues?.includes(moneyValue)}
+										<div
+											class="rounded px-2 py-1.5 text-center font-medium shadow-sm
+											{isActive
+												? moneyValue >= 100000
+													? 'bg-red-500 text-white'
+													: 'bg-blue-500 text-white'
+												: 'bg-gray-700 text-gray-400 line-through opacity-60'}"
+										>
+											{formatMoney(moneyValue)}
+										</div>
+									{/each}
+								</div>
 							</div>
-						{/if}
-
-						<div class="rounded-lg bg-white/10 p-3">
-							<p class="text-sm text-white/80">Cases Opened:</p>
-							<p class="text-xl font-bold text-white">
-								{openedCases} / {totalCases}
-							</p>
-						</div>
-
-						{#if gameState.remainingMoneyValues}
-							<div class="rounded-lg bg-white/10 p-3">
-								<p class="text-sm text-white/80">Amounts Left:</p>
-								<p class="text-xl font-bold text-white">
-									{gameState.remainingMoneyValues.length}
-								</p>
-							</div>
-						{/if}
-
-						{#if bankerOffer}
-							<div class="rounded-lg bg-green-500/20 p-3">
-								<p class="text-sm text-white/80">Current Offer:</p>
-								<p class="text-lg font-bold text-green-300">
-									{formatMoney(bankerOffer)}
-								</p>
-							</div>
+						{:else}
+							<p class="text-white/60">Money values not yet available.</p>
 						{/if}
 					</div>
 				</div>
-			{/if}
-		</div>
+
+				<!-- Right: Briefcases, Deal Voting View, or Game Over View -->
+				<div class="w-2/3">
+					{#if gameState.phase.type === 'GameOver'}
+						<!-- Show Game Over View when game is complete -->
+						<GameOverView {gameState} />
+					{:else if gameState.phase.type === 'DealOrNoDealVoting'}
+						<!-- Show Deal Voting View during voting phase -->
+						<DealVotingView {gameState} />
+					{:else}
+						<!-- Show Briefcases during other phases -->
+						<div class="h-full rounded-2xl bg-black/30 p-6 backdrop-blur-sm">
+							<h3 class="mb-4 text-center text-xl font-bold text-white">💼 Briefcases 💼</h3>
+							{#if gameState.briefcases && gameState.briefcases.length > 0}
+								<div class="grid grid-cols-4 gap-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-6">
+									{#each gameState.briefcases as briefcase (briefcase.index)}
+										{@const caseIndex = briefcase.index}
+										{@const isOpened = briefcase.isOpened}
+										{@const caseValue = briefcase.value}
+										{@const isPlayerCase = gameState.playerChosenCaseIndex === caseIndex}
+										{@const votersForThisCase = gameState.caseVotes?.[caseIndex] || []}
+
+										<div
+											class="flex aspect-square flex-col items-center justify-start rounded border p-1 text-center text-xs shadow-sm sm:p-2 sm:text-sm
+											{isOpened
+												? 'border-gray-600 bg-gray-900/50 text-gray-400 line-through opacity-70'
+												: isPlayerCase
+													? 'border-yellow-400 bg-yellow-500/20 text-yellow-100 ring-2 ring-yellow-400'
+													: 'border-white/30 bg-white/10 text-white hover:bg-white/20'}"
+										>
+											<div>
+												<div class="flex-shrink-0">
+													<span class="font-bold">#{caseIndex + 1}</span>
+													{#if isPlayerCase && !isOpened}
+														<span class="block text-[0.6rem] text-yellow-300 sm:text-xs"
+															>(Your Pick)</span
+														>
+													{/if}
+												</div>
+
+												{#if isOpened && caseValue !== undefined}
+													<span class="mt-0.5 block text-[0.6rem] sm:text-xs"
+														>{formatMoney(caseValue)}</span
+													>
+												{/if}
+											</div>
+
+											{#if !isOpened && votersForThisCase && votersForThisCase.length > 0}
+												{@const maxVisibleVotes = 6}
+												{@const visibleVotes = votersForThisCase.slice(0, maxVisibleVotes)}
+												{@const remainingCount = Math.max(
+													0,
+													votersForThisCase.length - maxVisibleVotes
+												)}
+												<div class="mt-auto w-full pt-0.5">
+													<div class="flex flex-wrap justify-center gap-0.5">
+														{#each visibleVotes as voter (voter)}
+															<div
+																class="rounded bg-white/20 px-1 py-0.5 text-lg font-medium text-white"
+															>
+																{voter}
+															</div>
+														{/each}
+														{#if remainingCount > 0}
+															<div
+																class="rounded bg-white/30 px-1 py-0.5 text-lg font-medium text-white"
+															>
+																+{remainingCount}
+															</div>
+														{/if}
+													</div>
+												</div>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{:else}
+								<p class="text-white/60">Briefcases not yet initialized.</p>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			</div>
+		{:else}
+			<!-- Setup phase centered content -->
+			<div class="flex flex-1 items-center justify-center p-6">
+				<div class="space-y-6 text-center">
+					<div class="animate-spin text-8xl">⚙️</div>
+					<h3 class="text-3xl font-bold text-white">Setting Up Game</h3>
+					<p class="text-lg text-white/80">Get ready for the ultimate game of risk and reward!</p>
+					<div class="space-y-2 text-white/60">
+						<p>📦 Briefcases with hidden amounts</p>
+						<p>🏦 The banker will make offers</p>
+						<p>🎯 Will you take the deal or risk it all?</p>
+					</div>
+				</div>
+			</div>
+		{/if}
 	</div>
 </div>
 

@@ -110,7 +110,19 @@ function createDealNoDealStore() {
 			remainingMoneyValues: [...(gameState.remaining_money_values_in_play || [])],
 			currentRoundInfo,
 			voteCounts,
-			totalCases: gameState.briefcase_values.length
+			totalCases: gameState.briefcase_values.length,
+			// Include case votes for stream view
+			caseVotes: JSON.parse(JSON.stringify(caseVotesMap)),
+			// Include voter names for Deal/No Deal voting
+			dealVotes:
+				gameState.phase.type === 'DealOrNoDealVoting'
+					? {
+							deal: [...dealNoDealVotesMap.DEAL],
+							noDeal: [...dealNoDealVotesMap['NO DEAL']]
+						}
+					: undefined,
+			// Include all money values for stream money board
+			allMoneyValues: [...gameState.briefcase_values]
 		};
 	}
 

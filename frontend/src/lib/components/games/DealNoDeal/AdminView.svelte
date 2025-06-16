@@ -2,7 +2,6 @@
 	import { dealNoDealStore } from './store.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import StreamControls from '$lib/components/ui/StreamControls.svelte';
-	import StreamDemoCard from '$lib/components/ui/StreamDemoCard.svelte';
 	import {
 		Card,
 		CardContent,
@@ -219,9 +218,6 @@
 
 				<!-- Stream Controls Card -->
 				<StreamControls />
-
-				<!-- Stream Demo Card (for testing) -->
-				<StreamDemoCard />
 			</div>
 
 			<!-- Right Column -->

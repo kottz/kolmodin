@@ -83,6 +83,13 @@ export interface DealNoDealPublicState extends BasePublicGameState {
 	};
 	voteCounts?: Record<string, number>; // Vote tallies for current voting phase
 	totalCases: number;
+	// Additional fields for stream view
+	caseVotes?: Record<number, string[]>; // Map of case index to voter names
+	dealVotes?: {
+		deal: string[]; // Array of usernames who voted DEAL
+		noDeal: string[]; // Array of usernames who voted NO DEAL
+	};
+	allMoneyValues?: number[]; // All money values for displaying the complete money board
 }
 
 // GameEvent enum from server (client-side representation of event_data)
