@@ -28,9 +28,9 @@ export interface ClipQueueFullState {
 export type ClipAddedEvent = { clip: ClipInfo };
 export type ClipRemovedEvent = { videoId: string; removedByAdmin: boolean };
 export type PlaybackStartedEvent = { videoId: string };
-export type PlaybackStoppedEvent = {};
+export type PlaybackStoppedEvent = Record<string, never>;
 export type SettingsChangedEvent = { newSettings: ClipQueueSettings };
-export type QueueWasResetEvent = {};
+export type QueueWasResetEvent = Record<string, never>;
 export type ClipSubmissionRejectedEvent = {
 	submittedByUsername: string;
 	inputText: string;
@@ -52,10 +52,10 @@ export type ClipQueueEventData =
 
 // Admin command data types
 export type PlayClipCommand = { videoId: string };
-export type PlayNextInQueueCommand = {};
+export type PlayNextInQueueCommand = Record<string, never>;
 export type RemoveClipFromQueueCommand = { videoId: string };
 export type UpdateSettingsCommand = { newSettings: ClipQueueSettings };
-export type ResetQueueCommand = {};
+export type ResetQueueCommand = Record<string, never>;
 export type NotifyClipFinishedPlayingCommand = { videoId: string };
 
 export type ClipQueueCommandData =

@@ -520,3 +520,119 @@ impl GameLogic for ClipQueueGame {
         self.clients.keys().copied().collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ServerConfig, TwitchConfig, GamesConfig, DatabaseConfig, YouTubeConfig, DataSourceType};
+
+    fn create_test_config() -> Arc<AppSettings> {
+        Arc::new(AppSettings {
+            server: ServerConfig {
+                port: 3000,
+                cors_origins: vec!["http://localhost:5173".to_string()],
+                admin_api_key: "test_key".to_string(),
+            },
+            twitch: TwitchConfig {
+                client_id: "test_client_id".to_string(),
+                client_secret: "test_client_secret".to_string(),
+                irc_server_url: "irc.chat.twitch.tv:6667".to_string(),
+            },
+            games: GamesConfig {
+                enabled_types: std::collections::HashSet::new(),
+            },
+            database: DatabaseConfig {
+                source_type: DataSourceType::File,
+                file_path: Some("/tmp/test.db".to_string()),
+                http_url: None,
+            },
+            youtube: Some(YouTubeConfig {
+                api_key: "test_youtube_api_key".to_string(),
+            }),
+        })
+    }
+
+    #[test]
+    fn test_parse_iso8601_duration() {
+        assert_eq!(parse_iso8601_duration("PT3M32S"), Some(212)); // 3*60 + 32 = 212
+        assert_eq!(parse_iso8601_duration("PT1H2M3S"), Some(3723)); // 1*3600 + 2*60 + 3 = 3723
+        assert_eq!(parse_iso8601_duration("PT45S"), Some(45)); // 45 seconds
+        assert_eq!(parse_iso8601_duration("PT5M"), Some(300)); // 5*60 = 300
+        assert_eq!(parse_iso8601_duration("PT2H"), Some(7200)); // 2*3600 = 7200
+        assert_eq!(parse_iso8601_duration("PT0S"), Some(0)); // 0 seconds
+        assert_eq!(parse_iso8601_duration("invalid"), None); // Invalid format
+    }
+
+    #[test]
+    fn test_extract_video_id() {
+        let config = create_test_config();
+        let game = ClipQueueGame::new(config);
+
+        // Test various YouTube URL formats
+        assert_eq!(
+            game.extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            game.extract_video_id("https://youtu.be/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            game.extract_video_id("dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+        assert_eq!(
+            game.extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=123"),
+            Some("dQw4w9WgXcQ".to_string())
+        );
+
+        // Test invalid inputs
+        assert_eq!(game.extract_video_id("invalid"), None);
+        assert_eq!(game.extract_video_id("https://example.com"), None);
+        assert_eq!(game.extract_video_id(""), None);
+    }
+
+    #[test]
+    fn test_is_duplicate() {
+        let config = create_test_config();
+        let mut game = ClipQueueGame::new(config);
+
+        // Add a clip to the queue
+        let clip = ClipInfo {
+            video_id: "dQw4w9WgXcQ".to_string(),
+            title: "Test Video".to_string(),
+            channel_title: "Test Channel".to_string(),
+            duration_iso8601: "PT3M32S".to_string(),
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            submitted_by_username: "testuser".to_string(),
+            submitted_at_timestamp: 0,
+        };
+        game.state.clip_queue.push(clip);
+
+        // Test duplicate detection
+        assert!(game.is_duplicate("dQw4w9WgXcQ"));
+        assert!(!game.is_duplicate("different_video_id"));
+    }
+
+    #[test]
+    fn test_default_settings() {
+        let settings = ClipQueueSettings::default();
+        assert!(settings.submissions_open);
+        assert!(!settings.allow_duplicates);
+        assert_eq!(settings.max_clip_duration_seconds, 600);
+    }
+
+    #[test]
+    fn test_game_type_id() {
+        let config = create_test_config();
+        let game = ClipQueueGame::new(config);
+        assert_eq!(game.game_type_id(), "ClipQueue");
+    }
+
+    #[test]
+    fn test_is_empty_initially() {
+        let config = create_test_config();
+        let game = ClipQueueGame::new(config);
+        assert!(game.is_empty());
+    }
+}

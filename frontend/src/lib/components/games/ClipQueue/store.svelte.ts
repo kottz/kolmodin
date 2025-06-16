@@ -7,15 +7,16 @@ import { info, warn, error } from '$lib/utils/logger';
 const GAME_TYPE_ID = 'ClipQueue';
 
 // Transform server clip data (snake_case) to frontend format (camelCase)
-function transformClipFromServer(serverClip: any): ClipInfo {
+function transformClipFromServer(serverClip: unknown): ClipInfo {
+	const clip = serverClip as Record<string, unknown>;
 	return {
-		videoId: serverClip.video_id,
-		title: serverClip.title,
-		channelTitle: serverClip.channel_title,
-		durationIso8601: serverClip.duration_iso8601,
-		thumbnailUrl: serverClip.thumbnail_url,
-		submittedByUsername: serverClip.submitted_by_username,
-		submittedAtTimestamp: serverClip.submitted_at_timestamp
+		videoId: clip.video_id as string,
+		title: clip.title as string,
+		channelTitle: clip.channel_title as string,
+		durationIso8601: clip.duration_iso8601 as string,
+		thumbnailUrl: clip.thumbnail_url as string,
+		submittedByUsername: clip.submitted_by_username as string,
+		submittedAtTimestamp: clip.submitted_at_timestamp as number
 	};
 }
 
@@ -96,7 +97,7 @@ function createClipQueueStore() {
 	};
 
 	// Process incoming events from the backend
-	function processEvent(eventData: any): void {
+	function processEvent(eventData: unknown): void {
 		if (!eventData || typeof eventData !== 'object') {
 			warn('ClipQueue: Received invalid event data', eventData);
 			return;
@@ -114,7 +115,7 @@ function createClipQueueStore() {
 						typeof data.data === 'object' &&
 						'state' in data.data
 					) {
-						const serverState = data.data.state as any;
+						const serverState = data.data.state as Record<string, unknown>;
 						info('ClipQueue: Full state update received', serverState);
 						info(
 							'ClipQueue: Current clipQueue length before update:',
@@ -220,7 +221,8 @@ function createClipQueueStore() {
 	const computed = {
 		get currentlyPlayingClip(): ClipInfo | null {
 			if (gameState.phase?.name === 'Playing') {
-				const currentClipVideoId = (gameState.phase as any).current_clip_video_id;
+				const currentClipVideoId = (gameState.phase as Record<string, unknown>)
+					.current_clip_video_id as string;
 				return gameState.clipQueue?.find((clip) => clip.videoId === currentClipVideoId) || null;
 			}
 			return null;
@@ -228,7 +230,8 @@ function createClipQueueStore() {
 
 		get nextClipInQueue(): ClipInfo | null {
 			if (gameState.phase?.name === 'Playing') {
-				const currentClipVideoId = (gameState.phase as any).current_clip_video_id;
+				const currentClipVideoId = (gameState.phase as Record<string, unknown>)
+					.current_clip_video_id as string;
 				const currentIndex =
 					gameState.clipQueue?.findIndex((clip) => clip.videoId === currentClipVideoId) ?? -1;
 				if (currentIndex !== -1 && currentIndex < (gameState.clipQueue?.length || 0) - 1) {
@@ -260,7 +263,7 @@ function createClipQueueStore() {
 				type: gameState.phase?.name || 'Idle',
 				currentClipVideoId:
 					gameState.phase?.name === 'Playing'
-						? (gameState.phase as any).current_clip_video_id
+						? ((gameState.phase as Record<string, unknown>).current_clip_video_id as string)
 						: undefined
 			},
 			currentClip: currentlyPlayingClip ? { ...currentlyPlayingClip } : null,

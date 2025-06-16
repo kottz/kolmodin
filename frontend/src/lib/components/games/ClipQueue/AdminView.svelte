@@ -203,14 +203,12 @@
 				<!-- Submissions Toggle -->
 				<div class="flex items-center justify-between">
 					<Label for="submissions-open" class="flex items-center gap-2">
-						{#snippet children()}
-							{#if currentSettings.submissionsOpen}
-								<Unlock class="h-4 w-4 text-green-500" />
-							{:else}
-								<Lock class="h-4 w-4 text-red-500" />
-							{/if}
-							Submissions
-						{/snippet}
+						{#if currentSettings.submissionsOpen}
+							<Unlock class="h-4 w-4 text-green-500" />
+						{:else}
+							<Lock class="h-4 w-4 text-red-500" />
+						{/if}
+						Submissions
 					</Label>
 					<Checkbox
 						id="submissions-open"
@@ -221,11 +219,7 @@
 
 				<!-- Allow Duplicates -->
 				<div class="flex items-center justify-between">
-					<Label for="allow-duplicates">
-						{#snippet children()}
-							Allow Duplicates
-						{/snippet}
-					</Label>
+					<Label for="allow-duplicates">Allow Duplicates</Label>
 					<Checkbox
 						id="allow-duplicates"
 						checked={currentSettings.allowDuplicates}
@@ -235,21 +229,13 @@
 
 				<!-- Autoplay Next -->
 				<div class="flex items-center justify-between">
-					<Label for="autoplay-next">
-						{#snippet children()}
-							Autoplay Next
-						{/snippet}
-					</Label>
+					<Label for="autoplay-next">Autoplay Next</Label>
 					<Checkbox id="autoplay-next" bind:checked={autoplayNext} />
 				</div>
 
 				<!-- Max Duration -->
 				<div class="space-y-2">
-					<Label for="max-duration">
-						{#snippet children()}
-							Max Duration (seconds)
-						{/snippet}
-					</Label>
+					<Label for="max-duration">Max Duration (seconds)</Label>
 					<Input
 						id="max-duration"
 						type="number"
