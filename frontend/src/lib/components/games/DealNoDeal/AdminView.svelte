@@ -200,16 +200,16 @@
 						<!-- CardDescription with Phase info removed as per request -->
 					</CardHeader>
 					<CardContent class="space-y-4">
-						<div class="flex flex-wrap gap-2">
-							<Button onclick={dealNoDealStore.actions.startGame} size="sm">
-								{#if dndState.phase.type === 'GameOver'}Restart Game{:else}Start Game{/if}
+						<div class="flex flex-col gap-2">
+							<Button onclick={dealNoDealStore.actions.startGame} class="w-full" size="lg">
+								{#if dndState.phase.type === 'GameOver'}New Game{:else}Start Game{/if}
 							</Button>
 							<Button
 								onclick={dealNoDealStore.actions.concludeVotingAndProcess}
-								variant="secondary"
-								size="sm"
+								variant="destructive"
+								class="w-full"
 							>
-								Conclude Voting & Process
+								End Vote
 							</Button>
 						</div>
 						<!-- Detailed game state info (round, cases to open, banker offer) removed from here -->
