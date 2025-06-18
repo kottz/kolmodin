@@ -89,6 +89,10 @@ export interface DealNoDealPublicState extends BasePublicGameState {
 		deal: string[]; // Array of usernames who voted DEAL
 		noDeal: string[]; // Array of usernames who voted NO DEAL
 	};
+	switchKeepVotes?: {
+		switch: string[]; // Array of usernames who voted SWITCH
+		keep: string[]; // Array of usernames who voted KEEP
+	};
 	allMoneyValues?: number[]; // All money values for displaying the complete money board
 }
 

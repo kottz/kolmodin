@@ -201,16 +201,20 @@
 					</CardHeader>
 					<CardContent class="space-y-4">
 						<div class="flex flex-col gap-2">
-							<Button onclick={dealNoDealStore.actions.startGame} class="w-full" size="lg">
-								{#if dndState.phase.type === 'GameOver'}New Game{:else}Start Game{/if}
-							</Button>
-							<Button
-								onclick={dealNoDealStore.actions.concludeVotingAndProcess}
-								variant="destructive"
-								class="w-full"
-							>
-								End Vote
-							</Button>
+							{#if dndState.phase.type === 'Setup' || dndState.phase.type === 'GameOver'}
+								<Button onclick={dealNoDealStore.actions.startGame} class="w-full" size="lg">
+									{#if dndState.phase.type === 'GameOver'}New Game{:else}Start Game{/if}
+								</Button>
+							{/if}
+							{#if dndState.phase.type !== 'Setup'}
+								<Button
+									onclick={dealNoDealStore.actions.concludeVotingAndProcess}
+									variant="destructive"
+									class="w-full"
+								>
+									End Vote
+								</Button>
+							{/if}
 						</div>
 						<!-- Detailed game state info (round, cases to open, banker offer) removed from here -->
 					</CardContent>

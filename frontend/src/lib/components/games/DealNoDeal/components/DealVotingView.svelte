@@ -80,10 +80,4 @@
 			</div>
 		</div>
 	</div>
-
-	<!-- Vote Instructions -->
-	<div class="mt-4 text-center text-sm text-white/60">
-		Vote in chat: <span class="font-mono text-white/80">DEAL</span> or
-		<span class="font-mono text-white/80">NO DEAL</span>
-	</div>
 </div>

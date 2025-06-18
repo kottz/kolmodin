@@ -121,6 +121,14 @@ function createDealNoDealStore() {
 							noDeal: [...dealNoDealVotesMap['NO DEAL']]
 						}
 					: undefined,
+			// Include voter names for Switch/Keep voting
+			switchKeepVotes:
+				gameState.phase.type === 'SwitchOrKeepVoting'
+					? {
+							switch: [...switchKeepVotesMap.SWITCH],
+							keep: [...switchKeepVotesMap.KEEP]
+						}
+					: undefined,
 			// Include all money values for stream money board
 			allMoneyValues: [...gameState.briefcase_values]
 		};

@@ -2,6 +2,7 @@
 	import type { DealNoDealPublicState } from './types';
 	import type { StreamDisplayConfig } from '$lib/types/stream.types';
 	import DealVotingView from './components/DealVotingView.svelte';
+	import SwitchKeepVotingView from './components/SwitchKeepVotingView.svelte';
 	import GameOverView from './components/GameOverView.svelte';
 
 	interface Props {
@@ -127,12 +128,37 @@
 					{/if}
 				</div>
 
-				<!-- Current Offer or Player Case -->
-				<div class="text-white">
-					{#if bankerOffer}
+				<!-- Voting Instructions -->
+				<div class="text-center text-white">
+					{#if gameState.phase.type === 'PlayerCaseSelectionVoting'}
+						<div class="rounded-lg bg-white/10 p-3">
+							<div class="text-lg">Type a case number in chat to vote</div>
+						</div>
+					{:else if gameState.phase.type === 'RoundCaseOpeningVoting'}
+						<div class="rounded-lg bg-white/10 p-3">
+							<div class="text-lg">Type a case number in chat to vote</div>
+						</div>
+					{:else if gameState.phase.type === 'DealOrNoDealVoting'}
+						<div class="rounded-lg bg-white/10 p-3">
+							<div class="text-lg">
+								Type <span class="font-bold">deal</span> or <span class="font-bold">no deal</span> in
+								chat
+							</div>
+						</div>
+					{:else if gameState.phase.type === 'SwitchOrKeepVoting'}
+						<div class="rounded-lg bg-white/10 p-3">
+							<div class="text-lg">
+								Type <span class="font-bold">switch</span> or <span class="font-bold">keep</span> in
+								chat
+							</div>
+						</div>
+					{:else if gameState.phase.type === 'BankerOfferCalculation'}
 						<div class="rounded-lg bg-yellow-500/20 p-3">
-							<span class="text-sm text-yellow-200">Banker's Offer:</span>
-							<div class="text-xl font-bold text-yellow-300">{formatMoney(bankerOffer)}</div>
+							<div class="text-lg text-yellow-200">Banker is calculating offer...</div>
+						</div>
+					{:else if gameState.phase.type === 'GameOver'}
+						<div class="rounded-lg bg-green-500/20 p-3">
+							<div class="text-lg text-green-200">Game Over!</div>
 						</div>
 					{:else if hasPlayerCase}
 						<div class="rounded-lg bg-blue-500/20 p-3">
@@ -217,7 +243,7 @@
 					</div>
 				</div>
 
-				<!-- Right: Briefcases, Deal Voting View, or Game Over View -->
+				<!-- Right: Briefcases, Deal Voting View, Switch/Keep Voting View, or Game Over View -->
 				<div class="w-2/3">
 					{#if gameState.phase.type === 'GameOver'}
 						<!-- Show Game Over View when game is complete -->
@@ -225,6 +251,9 @@
 					{:else if gameState.phase.type === 'DealOrNoDealVoting'}
 						<!-- Show Deal Voting View during voting phase -->
 						<DealVotingView {gameState} />
+					{:else if gameState.phase.type === 'SwitchOrKeepVoting'}
+						<!-- Show Switch/Keep Voting View during final decision phase -->
+						<SwitchKeepVotingView {gameState} />
 					{:else}
 						<!-- Show Briefcases during other phases -->
 						<div class="h-full rounded-2xl bg-black/30 p-6 backdrop-blur-sm">
