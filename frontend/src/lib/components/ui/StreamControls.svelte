@@ -3,7 +3,7 @@
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { uiStore } from '$lib/stores/ui.store.svelte';
 	import { broadcastService } from '$lib/services/broadcast.service';
-	import { Monitor, Eye, EyeOff, ExternalLink } from 'lucide-svelte';
+	import { Monitor, Eye, EyeOff, ExternalLink, CheckCircle, AlertCircle } from 'lucide-svelte';
 	import { info } from '$lib/utils/logger';
 
 	interface Props {
@@ -15,10 +15,16 @@
 	const canOpenStream = $derived(uiStore.canOpenStreamWindow);
 	const streamWindowState = $derived(uiStore.streamWindow);
 	let isStreamVisible = $state(true); // Track visibility state
+	let isOpeningStream = $state(false); // Track opening state
 
-	function handleOpenStreamWindow(): void {
+	async function handleOpenStreamWindow(): Promise<void> {
 		info('StreamControls: Opening stream window');
-		uiStore.openStreamWindow();
+		isOpeningStream = true;
+		try {
+			await uiStore.openStreamWindow();
+		} finally {
+			isOpeningStream = false;
+		}
 	}
 
 	function handleCloseStreamWindow(): void {
@@ -59,8 +65,22 @@
 				<p class="text-sm">Stream controls available when game is active</p>
 			</div>
 		{:else if streamWindowState.isOpen}
-			<!-- Window is open: Focus + Close + Visibility Toggle -->
-			<div class="space-y-2">
+			<!-- Window is open: Show status and controls -->
+			<div class="space-y-3">
+				<!-- Stream Status -->
+				<div class="bg-muted/50 flex items-center gap-2 rounded-lg p-2">
+					{#if streamWindowState.isConfirmed}
+						<CheckCircle class="h-4 w-4 text-green-500" />
+						<span class="text-sm text-green-600 dark:text-green-400">Stream Ready</span>
+					{:else}
+						<AlertCircle class="h-4 w-4 text-amber-500" />
+						<span class="text-sm text-amber-600 dark:text-amber-400"
+							>Waiting for confirmation...</span
+						>
+					{/if}
+				</div>
+
+				<!-- Control Buttons -->
 				<div class="flex gap-2">
 					<Button onclick={handleFocusStream} variant="default" size="sm" class="flex-1">
 						<Monitor class="mr-2 h-4 w-4" />
@@ -77,6 +97,7 @@
 					size="sm"
 					class="w-full"
 					title={isStreamVisible ? 'Hide Stream' : 'Show Stream'}
+					disabled={!streamWindowState.isConfirmed}
 				>
 					{#if isStreamVisible}
 						<Eye class="mr-2 h-4 w-4" />
@@ -89,9 +110,22 @@
 			</div>
 		{:else}
 			<!-- Window is closed: Just Open button -->
-			<Button onclick={handleOpenStreamWindow} variant="default" size="sm" class="w-full">
-				<Monitor class="mr-2 h-4 w-4" />
-				Open Stream Window
+			<Button
+				onclick={handleOpenStreamWindow}
+				variant="default"
+				size="sm"
+				class="w-full"
+				disabled={isOpeningStream}
+			>
+				{#if isOpeningStream}
+					<div
+						class="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+					></div>
+					Opening...
+				{:else}
+					<Monitor class="mr-2 h-4 w-4" />
+					Open Stream Window
+				{/if}
 			</Button>
 		{/if}
 	</CardContent>

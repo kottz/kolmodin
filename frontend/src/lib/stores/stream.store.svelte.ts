@@ -46,6 +46,20 @@ function createStreamStore() {
 			broadcastService.registerMessageHandler('GAME_CHANGED', handleGameChanged);
 			broadcastService.registerMessageHandler('STREAM_CONTROL', handleStreamControl);
 
+			// Extract windowId from URL parameters if available
+			const urlParams = new URLSearchParams(window.location.search);
+			const windowId =
+				urlParams.get('windowId') ||
+				`stream-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+			info(`StreamStore: Using windowId: ${windowId}`);
+
+			// Add a small delay to ensure BroadcastChannel is fully initialized
+			setTimeout(() => {
+				info(`StreamStore: Sending ready signal for windowId: ${windowId}`);
+				broadcastService.sendStreamReady(windowId);
+			}, 100);
+
 			info('StreamStore: Initialized and ready to receive broadcast messages');
 		}
 	}
@@ -60,12 +74,17 @@ function createStreamStore() {
 
 		// Only update if this is for the current game or we should switch games
 		if (state.currentGameType === null || state.currentGameType === stateMessage.gameType) {
+			info(`StreamStore: Updating game state for ${stateMessage.gameType}`);
 			state.currentGameType = stateMessage.gameType;
 			state.gameState = stateMessage.state;
 			state.lastUpdateTimestamp = stateMessage.timestamp;
 			console.log(
 				'StreamStore: Updated game state, current phase:',
 				stateMessage.state?.phase?.type
+			);
+		} else {
+			info(
+				`StreamStore: Ignoring state update for ${stateMessage.gameType}, current game is ${state.currentGameType}`
 			);
 		}
 	}

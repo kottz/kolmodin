@@ -2,6 +2,7 @@
 
 import { info } from '$lib/utils/logger';
 import { gameEventRouter } from '$lib/services/game.event.router';
+import { broadcastService } from '$lib/services/broadcast.service';
 
 export type AppScreen = 'home' | 'selectGame' | 'gameActive';
 
@@ -13,9 +14,20 @@ interface UiStoreState {
 interface StreamWindowInfo {
 	window: Window | null;
 	isOpen: boolean;
+	isConfirmed: boolean;
+	windowId: string | null;
 }
 
 function createUiStore() {
+	// Only initialize broadcast service for admin window if we're not in the stream window
+	if (
+		typeof window !== 'undefined' &&
+		!broadcastService.isInitialized() &&
+		!window.location.pathname.includes('/stream')
+	) {
+		broadcastService.initialize(false); // false = admin window
+	}
+
 	const state = $state<UiStoreState>({
 		currentScreen: 'home',
 		activeGameTypeIdForUI: null
@@ -23,7 +35,9 @@ function createUiStore() {
 
 	const streamWindow = $state<StreamWindowInfo>({
 		window: null,
-		isOpen: false
+		isOpen: false,
+		isConfirmed: false,
+		windowId: null
 	});
 
 	function navigateToHome(): void {
@@ -81,7 +95,7 @@ function createUiStore() {
 	}
 
 	// Stream window management functions
-	function openStreamWindow(): void {
+	async function openStreamWindow(): Promise<void> {
 		if (streamWindow.window && !streamWindow.window.closed) {
 			// Window already open, just focus it
 			streamWindow.window.focus();
@@ -89,6 +103,8 @@ function createUiStore() {
 		}
 
 		try {
+			const windowId = `stream-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
 			const windowFeatures = [
 				'width=1280',
 				'height=720',
@@ -103,23 +119,38 @@ function createUiStore() {
 				'status=no'
 			].join(',');
 
-			const newWindow = window.open('/stream', 'gameStream', windowFeatures);
+			const newWindow = window.open(`/stream?windowId=${windowId}`, 'gameStream', windowFeatures);
 
 			if (newWindow) {
 				streamWindow.window = newWindow;
 				streamWindow.isOpen = true;
+				streamWindow.isConfirmed = false;
+				streamWindow.windowId = windowId;
 
 				// Monitor when window is closed
 				const checkClosed = setInterval(() => {
 					if (newWindow.closed) {
 						streamWindow.window = null;
 						streamWindow.isOpen = false;
+						streamWindow.isConfirmed = false;
+						streamWindow.windowId = null;
 						clearInterval(checkClosed);
 						info('UI Store: Stream window was closed');
 					}
 				}, 1000);
 
-				info('UI Store: Stream window opened');
+				info('UI Store: Stream window opened, waiting for confirmation...');
+
+				// Wait for stream window to confirm it's ready
+				const confirmed = await broadcastService.waitForStreamConfirmation(windowId);
+
+				if (confirmed && streamWindow.windowId === windowId) {
+					streamWindow.isConfirmed = true;
+					info('UI Store: Stream window confirmed and ready');
+				} else {
+					info('UI Store: Stream window confirmation timed out');
+					// Don't close the window, just mark as unconfirmed
+				}
 			} else {
 				info('UI Store: Failed to open stream window (popup blocked?)');
 			}
@@ -134,6 +165,8 @@ function createUiStore() {
 		}
 		streamWindow.window = null;
 		streamWindow.isOpen = false;
+		streamWindow.isConfirmed = false;
+		streamWindow.windowId = null;
 		info('UI Store: Stream window closed');
 	}
 

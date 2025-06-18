@@ -39,12 +39,19 @@ export interface StreamControlMessage extends BaseBroadcastMessage {
 	command: 'show' | 'hide' | 'clear';
 }
 
+// Stream ready message
+export interface StreamReadyMessage extends BaseBroadcastMessage {
+	type: 'STREAM_READY';
+	windowId: string;
+}
+
 // Union type for all broadcast messages
 export type BroadcastMessage =
 	| StateUpdateMessage
 	| StreamEventMessage
 	| GameChangedMessage
-	| StreamControlMessage;
+	| StreamControlMessage
+	| StreamReadyMessage;
 
 // Interface that game stores should implement for streaming
 export interface StreamableGameStore {
