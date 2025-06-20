@@ -524,7 +524,9 @@ impl GameLogic for ClipQueueGame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ServerConfig, TwitchConfig, GamesConfig, DatabaseConfig, YouTubeConfig, DataSourceType};
+    use crate::config::{
+        DataSourceType, DatabaseConfig, GamesConfig, ServerConfig, TwitchConfig, YouTubeConfig,
+    };
 
     fn create_test_config() -> Arc<AppSettings> {
         Arc::new(AppSettings {
