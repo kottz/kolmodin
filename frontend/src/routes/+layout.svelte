@@ -5,6 +5,9 @@
 	import WebsocketDisconnectOverlay from '$lib/components/global/WebsocketDisconnectOverlay.svelte';
 	import { PUBLIC_APP_TITLE } from '$env/static/public'; // For browser tab title
 
+	// Import game stores to ensure they're registered with the event router
+	import '$lib/components/games/Quiz/store.svelte';
+
 	// This 'children' prop is implicitly provided by SvelteKit for layouts
 	let { children } = $props();
 </script>

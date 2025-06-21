@@ -31,6 +31,12 @@ export const lobbyService = {
 				id: 'ClipQueue',
 				name: 'Clip Queue',
 				description: 'Community-driven YouTube clip watching with Twitch chat submissions.'
+			},
+			{
+				id: 'Quiz',
+				name: 'Quiz',
+				description:
+					'Question and answer game where the admin reads questions and players answer in chat'
 			}
 			// Add other game types your server supports by their game_type_id
 		]);

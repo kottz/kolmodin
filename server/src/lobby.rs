@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::config::{AppSettings, GamesConfig};
 use crate::db::WordListManager;
 use crate::game_logic::{
-    ClipQueueGame, DealNoDealGame, GameLogic, MedAndraOrdGameState, ServerToClientMessage,
-    messages as game_messages,
+    ClipQueueGame, DealNoDealGame, GameLogic, MedAndraOrdGameState, QuizGameState,
+    ServerToClientMessage, messages as game_messages,
 };
 use crate::twitch::{
     ParsedTwitchMessage, TwitchChannelConnectionStatus, TwitchChatManagerActorHandle,
@@ -196,6 +196,28 @@ impl LobbyManagerActor {
                         let game_engine = ClipQueueGame::new(self.app_settings.clone());
                         actual_game_type_created = game_engine.game_type_id();
                         lobby_actor_handle = LobbyActorHandle::new_spawned::<ClipQueueGame>(
+                            lobby_id,
+                            32,
+                            manager_handle.clone(),
+                            game_engine,
+                            requested_twitch_channel.clone(),
+                            self.twitch_chat_manager_handle.clone(),
+                        );
+                    }
+                    "quiz" => {
+                        if !self.games_config.enabled_types.contains("quiz") {
+                            tracing::error!(
+                                lobby.id = %lobby_id,
+                                game.type = "quiz",
+                                "Game type not enabled"
+                            );
+                            let _ = respond_to
+                                .send(Err("Game type 'quiz' is not enabled.".to_string()));
+                            return;
+                        }
+                        let game_engine = QuizGameState::new(mao_words);
+                        actual_game_type_created = game_engine.game_type_id();
+                        lobby_actor_handle = LobbyActorHandle::new_spawned::<QuizGameState>(
                             lobby_id,
                             32,
                             manager_handle.clone(),

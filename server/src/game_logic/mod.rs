@@ -21,16 +21,19 @@ pub mod utils;
 pub mod clip_queue;
 pub mod deal_no_deal;
 pub mod med_andra_ord;
+pub mod quiz;
 
 pub use clip_queue::ClipQueueGame;
 pub use deal_no_deal::DealNoDealGame;
 pub use med_andra_ord::MedAndraOrdGameState;
+pub use quiz::QuizGameState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GameType {
     DealNoDeal,
     MedAndraOrd,
     ClipQueue,
+    Quiz,
 }
 
 impl GameType {
@@ -39,6 +42,7 @@ impl GameType {
             GameType::DealNoDeal,
             GameType::MedAndraOrd,
             GameType::ClipQueue,
+            GameType::Quiz,
         ];
 
         // Compile-time assertion: this should never be empty
@@ -55,6 +59,7 @@ impl GameType {
             GameType::DealNoDeal => &["dealnodeal", "dealornodeal"],
             GameType::MedAndraOrd => &["medandraord", "medandra", "ord"],
             GameType::ClipQueue => &["clipqueue", "queue"],
+            GameType::Quiz => &["quiz"],
         }
     }
 

@@ -7,6 +7,7 @@
 	// Stream-specific game view components
 	import MedAndraOrdStreamView from '$lib/components/games/MedAndraOrd/StreamView.svelte';
 	import DealNoDealStreamView from '$lib/components/games/DealNoDeal/StreamView.svelte';
+	import QuizStreamView from '$lib/components/games/Quiz/StreamView.svelte';
 
 	const state = $derived(streamStore.state);
 	const displayConfig = $derived(streamStore.displayConfig);
@@ -14,7 +15,8 @@
 	// Game component mapping
 	const gameStreamComponentMap = {
 		MedAndraOrd: MedAndraOrdStreamView,
-		DealNoDeal: DealNoDealStreamView
+		DealNoDeal: DealNoDealStreamView,
+		Quiz: QuizStreamView
 	};
 
 	let ActiveGameStreamComponent = $derived(getGameStreamComponent(state.currentGameType));
