@@ -21,6 +21,8 @@ pub enum DbError {
     },
     #[error("Failed to fetch words from URL '{url}': {source}")]
     HttpFetch { url: String, source: reqwest::Error },
+    #[error("Failed to parse data file: {0}")]
+    Parse(String),
 }
 
 #[derive(Debug, Error)]
