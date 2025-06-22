@@ -8,6 +8,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
+use crate::db::{TrivialPursuitData, TrivialPursuitQuestion};
 use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
@@ -23,7 +24,8 @@ pub struct RecentGuess {
     pub id: String,
     pub player: String,
     pub guessed_text: String,
-    pub correct_word: String,
+    pub correct_answer: String,
+    pub question: String,
     pub timestamp: u64,
 }
 
@@ -31,7 +33,7 @@ pub struct RecentGuess {
 #[serde(tag = "command")]
 pub enum AdminCommand {
     StartGame,
-    PassWord,
+    PassQuestion,
     ResetGame,
     SetTargetPoints { points: u32 },
     SetGameDuration { seconds: u32 },
@@ -43,19 +45,37 @@ pub enum AdminCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "event_type", content = "data")]
 pub enum GameEvent {
-    WordChanged { word: String, is_placeholder: bool },
-    PlayerScored { player: String, points: u32 },
-    GamePhaseChanged { new_phase: GamePhase },
-    GameTimeUpdate { remaining_seconds: u64 },
-    RecentGuessesUpdated { recent_guesses: Vec<RecentGuess> },
+    QuestionChanged {
+        question: String,
+        is_placeholder: bool,
+    },
+    PlayerScored {
+        player: String,
+        points: u32,
+    },
+    GamePhaseChanged {
+        new_phase: GamePhase,
+    },
+    GameTimeUpdate {
+        remaining_seconds: u64,
+    },
+    RecentGuessesUpdated {
+        recent_guesses: Vec<RecentGuess>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", content = "data")]
 pub enum GamePhase {
     Setup,
-    Playing { current_word: String },
-    GameOver { winner: String },
+    Playing {
+        current_question: String,
+        current_answer: String,
+        extra_info: Option<String>,
+    },
+    GameOver {
+        winner: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -72,9 +92,9 @@ pub struct QuizGameState {
     pub recent_guesses: Vec<RecentGuess>,
 
     #[serde(skip)]
-    current_word_list: Arc<Vec<String>>,
+    trivial_pursuit_data: Option<Arc<TrivialPursuitData>>,
     #[serde(skip)]
-    local_used_words: HashSet<String>,
+    local_used_question_ids: HashSet<u32>,
     #[serde(skip)]
     game_start_time: Option<Instant>,
 }
@@ -90,15 +110,15 @@ impl Clone for QuizGameState {
             time_limit_enabled: self.time_limit_enabled,
             player_scores: self.player_scores.clone(),
             recent_guesses: self.recent_guesses.clone(),
-            current_word_list: Arc::clone(&self.current_word_list),
-            local_used_words: self.local_used_words.clone(),
+            trivial_pursuit_data: self.trivial_pursuit_data.clone(),
+            local_used_question_ids: self.local_used_question_ids.clone(),
             game_start_time: self.game_start_time,
         }
     }
 }
 
 impl QuizGameState {
-    pub fn new(word_list_snapshot: Arc<Vec<String>>) -> Self {
+    pub fn new(trivial_pursuit_data: Option<Arc<TrivialPursuitData>>) -> Self {
         Self {
             clients: HashMap::new(),
             phase: GamePhase::Setup,
@@ -108,8 +128,8 @@ impl QuizGameState {
             time_limit_enabled: false,
             player_scores: HashMap::new(),
             recent_guesses: Vec::new(),
-            current_word_list: word_list_snapshot,
-            local_used_words: HashSet::new(),
+            trivial_pursuit_data,
+            local_used_question_ids: HashSet::new(),
             game_start_time: None,
         }
     }
@@ -244,16 +264,18 @@ impl QuizGameState {
             return;
         }
 
-        // Only clear player scores, not used words - preserve used words across multiple games
+        // Only clear player scores, not used question IDs - preserve used questions across multiple games
         self.player_scores.clear();
         self.game_start_time = Some(Instant::now());
 
-        if let Some(word) = self.get_next_word() {
+        if let Some((question, answer, extra_info)) = self.get_next_question() {
             self.phase = GamePhase::Playing {
-                current_word: word.clone(),
+                current_question: question.clone(),
+                current_answer: answer,
+                extra_info,
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
-                word,
+            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                question,
                 is_placeholder: false,
             })
             .await;
@@ -263,10 +285,12 @@ impl QuizGameState {
             .await;
         } else {
             self.phase = GamePhase::Playing {
-                current_word: "No questions!".to_string(),
+                current_question: "No questions!".to_string(),
+                current_answer: "".to_string(),
+                extra_info: None,
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
-                word: "No questions!".to_string(),
+            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                question: "No questions!".to_string(),
                 is_placeholder: true,
             })
             .await;
@@ -278,32 +302,36 @@ impl QuizGameState {
         }
     }
 
-    async fn handle_pass_word(&mut self) {
+    async fn handle_pass_question(&mut self) {
         if let GamePhase::Playing { .. } = &self.phase {
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 return;
             }
 
-            if let Some(word) = self.get_next_word() {
+            if let Some((question, answer, extra_info)) = self.get_next_question() {
                 self.phase = GamePhase::Playing {
-                    current_word: word.clone(),
+                    current_question: question.clone(),
+                    current_answer: answer,
+                    extra_info,
                 };
-                self.broadcast_game_event_to_all(GameEvent::WordChanged {
-                    word,
+                self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                    question,
                     is_placeholder: false,
                 })
                 .await;
             } else {
                 self.phase = GamePhase::Playing {
-                    current_word: "Out of questions!".to_string(),
+                    current_question: "Out of questions!".to_string(),
+                    current_answer: "".to_string(),
+                    extra_info: None,
                 };
-                self.broadcast_game_event_to_all(GameEvent::WordChanged {
-                    word: "Out of questions!".to_string(),
+                self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                    question: "Out of questions!".to_string(),
                     is_placeholder: true,
                 })
                 .await;
-                tracing::warn!("Ran out of questions during PassWord");
+                tracing::warn!("Ran out of questions during PassQuestion");
             }
         }
     }
@@ -311,7 +339,7 @@ impl QuizGameState {
     async fn handle_reset_game(&mut self) {
         self.phase = GamePhase::Setup;
         self.player_scores.clear();
-        self.local_used_words.clear();
+        self.local_used_question_ids.clear();
         self.recent_guesses.clear();
         self.game_start_time = None;
 
@@ -346,7 +374,13 @@ impl QuizGameState {
     }
 
     /// Adds a correct guess to the recent guesses list, maintaining a maximum of 5 entries.
-    fn add_recent_guess(&mut self, player: &str, guessed_text: &str, correct_word: &str) {
+    fn add_recent_guess(
+        &mut self,
+        player: &str,
+        guessed_text: &str,
+        correct_answer: &str,
+        question: &str,
+    ) {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -356,7 +390,8 @@ impl QuizGameState {
             id: uuid::Uuid::new_v4().to_string(),
             player: player.to_string(),
             guessed_text: guessed_text.to_string(),
-            correct_word: correct_word.to_string(),
+            correct_answer: correct_answer.to_string(),
+            question: question.to_string(),
             timestamp,
         };
 
@@ -382,7 +417,8 @@ impl QuizGameState {
                     tracing::info!(
                         player = %removed_guess.player,
                         guess = %removed_guess.guessed_text,
-                        word = %removed_guess.correct_word,
+                        answer = %removed_guess.correct_answer,
+                        question = %removed_guess.question,
                         new_score = *current_score,
                         "Removed recent guess and deducted point"
                     );
@@ -396,26 +432,43 @@ impl QuizGameState {
         }
     }
 
-    fn get_next_word(&mut self) -> Option<String> {
-        if self.current_word_list.is_empty() {
-            tracing::warn!("Question list is empty, cannot get next question");
+    fn get_next_question(&mut self) -> Option<(String, String, Option<String>)> {
+        let trivial_pursuit_data = self.trivial_pursuit_data.as_ref()?;
+
+        if trivial_pursuit_data.cards.is_empty() {
+            tracing::warn!("No Trivial Pursuit cards available");
             return None;
         }
 
-        let available_words: Vec<String> = self
-            .current_word_list // Use current_word_list
-            .iter()
-            .filter(|word| !self.local_used_words.contains(*word)) // Use local_used_words
-            .cloned()
-            .collect();
+        // Collect all available questions
+        let mut available_questions: Vec<&TrivialPursuitQuestion> = Vec::new();
+        for card in &trivial_pursuit_data.cards {
+            for question in &card.questions {
+                if !self.local_used_question_ids.contains(&question.id) {
+                    available_questions.push(question);
+                }
+            }
+        }
 
-        if available_words.is_empty() {
+        if available_questions.is_empty() {
             tracing::info!("All questions used, resetting used questions list for this game");
-            self.local_used_words.clear();
-            // Try again with reset list
-            self.current_word_list.choose(&mut thread_rng()).cloned()
+            self.local_used_question_ids.clear();
+            // Try again with reset list - get all questions
+            for card in &trivial_pursuit_data.cards {
+                for question in &card.questions {
+                    available_questions.push(question);
+                }
+            }
+        }
+
+        if let Some(selected_question) = available_questions.choose(&mut thread_rng()) {
+            Some((
+                selected_question.question.clone(),
+                selected_question.answer.clone(),
+                selected_question.extra_info.clone(),
+            ))
         } else {
-            available_words.choose(&mut thread_rng()).cloned()
+            None
         }
     }
 
@@ -423,7 +476,9 @@ impl QuizGameState {
         &mut self,
         player: &str,
         guessed_text: &str,
-        correct_word: &str,
+        correct_answer: &str,
+        question: &str,
+        question_id: u32,
     ) {
         if self.check_game_time_expired() {
             self.end_game_time_expired().await;
@@ -434,7 +489,10 @@ impl QuizGameState {
         *current_score += 1;
         let new_score = *current_score;
 
-        self.add_recent_guess(player, guessed_text, correct_word);
+        self.add_recent_guess(player, guessed_text, correct_answer, question);
+
+        // Mark question as used
+        self.local_used_question_ids.insert(question_id);
 
         self.broadcast_game_event_to_all(GameEvent::PlayerScored {
             player: player.to_string(),
@@ -459,21 +517,25 @@ impl QuizGameState {
             return;
         }
 
-        if let Some(word) = self.get_next_word() {
+        if let Some((question, answer, extra_info)) = self.get_next_question() {
             self.phase = GamePhase::Playing {
-                current_word: word.clone(),
+                current_question: question.clone(),
+                current_answer: answer,
+                extra_info,
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
-                word,
+            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                question,
                 is_placeholder: false,
             })
             .await;
         } else {
             self.phase = GamePhase::Playing {
-                current_word: "Out of questions!".to_string(),
+                current_question: "Out of questions!".to_string(),
+                current_answer: "".to_string(),
+                extra_info: None,
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
-                word: "Out of questions!".to_string(),
+            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                question: "Out of questions!".to_string(),
                 is_placeholder: true,
             })
             .await;
@@ -522,7 +584,7 @@ impl GameLogic for QuizGameState {
                     Ok(cmd) => {
                         match cmd {
                             AdminCommand::StartGame => self.handle_start_game().await,
-                            AdminCommand::PassWord => self.handle_pass_word().await,
+                            AdminCommand::PassQuestion => self.handle_pass_question().await,
                             AdminCommand::ResetGame => self.handle_reset_game().await,
                             AdminCommand::SetTargetPoints { points } => {
                                 self.handle_set_target_points(points)
@@ -568,30 +630,62 @@ impl GameLogic for QuizGameState {
     }
 
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {
-        if let GamePhase::Playing { current_word } = &self.phase {
+        if let GamePhase::Playing {
+            current_question: _,
+            current_answer,
+            extra_info: _,
+        } = &self.phase
+        {
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 self.broadcast_full_state_update().await;
                 return;
             }
 
-            if self.current_word_list.is_empty() {
-                return;
-            }
+            let trivial_pursuit_data = match &self.trivial_pursuit_data {
+                Some(data) => data,
+                None => return,
+            };
 
             let guess = message.text.trim();
-            let word = current_word.clone();
+            let answer = current_answer.clone();
 
-            if is_guess_acceptable(&word, guess) {
+            // Find the current question ID to mark it as used
+            let mut question_id = None;
+            'outer: for card in &trivial_pursuit_data.cards {
+                for question in &card.questions {
+                    if question.answer == answer {
+                        question_id = Some(question.id);
+                        break 'outer;
+                    }
+                }
+            }
+
+            if is_guess_acceptable(&answer, guess) {
                 tracing::debug!(
                     guess = %guess,
+                    answer = %answer,
                     player = %message.sender_username,
                     "Correct guess"
                 );
-                self.local_used_words.insert(word.clone());
-                self.process_correct_guess(&message.sender_username, guess, &word)
-                    .await;
-                self.broadcast_full_state_update().await;
+
+                if let Some(qid) = question_id {
+                    if let GamePhase::Playing {
+                        current_question, ..
+                    } = &self.phase
+                    {
+                        let question = current_question.clone();
+                        self.process_correct_guess(
+                            &message.sender_username,
+                            guess,
+                            &answer,
+                            &question,
+                            qid,
+                        )
+                        .await;
+                        self.broadcast_full_state_update().await;
+                    }
+                }
             }
         }
     }

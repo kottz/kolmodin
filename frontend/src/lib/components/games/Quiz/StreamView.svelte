@@ -47,6 +47,10 @@
 		winner?: string;
 	}>({ text: 'Listen carefully and answer in chat!', type: 'instruction' });
 
+	// Buffer question updates during correct answer displays
+	let displayedQuestion = $state<string>('');
+	let pendingQuestion = $state<string>('');
+
 	// Track game over animation state
 	let gameOverAnimationState = $state<'none' | 'celebration' | 'leaderboard'>('none');
 
@@ -96,8 +100,8 @@
 			// Skip if already processed
 			if (processedEventIds.has(eventId)) return;
 
-			if (event.type === 'CORRECT_ANSWER' && event.data.player && event.data.word) {
-				showCorrectAnswer(event.data.player, event.data.word);
+			if (event.type === 'CORRECT_ANSWER' && event.data.player && event.data.answer) {
+				showCorrectAnswer(event.data.player, event.data.answer);
 				processedEventIds.add(eventId);
 			} else if (event.type === 'RECENT_GUESSES_UPDATED' && event.data.recentGuesses) {
 				recentGuesses = event.data.recentGuesses;
@@ -113,6 +117,15 @@
 	}
 
 	function showCorrectAnswer(player: string, word: string) {
+		// Buffer any new question that might come in during this period
+		if (
+			gameState.phase.type === 'Playing' &&
+			gameState.phase.data?.currentQuestion &&
+			gameState.phase.data.currentQuestion !== displayedQuestion
+		) {
+			pendingQuestion = gameState.phase.data.currentQuestion;
+		}
+
 		// Update instruction card
 		instructionState = {
 			text: `${player} was correct!`,
@@ -124,14 +137,21 @@
 		// Clear any existing timeout
 		if (instructionTimeout) clearTimeout(instructionTimeout);
 
-		// Reset to instruction after longer delay
+		// Reset to instruction after shorter delay and apply pending question
 		instructionTimeout = setTimeout(() => {
 			instructionState = {
 				text: 'Listen carefully and answer in chat!',
 				type: 'instruction'
 			};
+
+			// Apply any pending question update
+			if (pendingQuestion) {
+				displayedQuestion = pendingQuestion;
+				pendingQuestion = '';
+			}
+
 			instructionTimeout = null;
-		}, 6000);
+		}, 2500);
 	}
 
 	function formatTime(seconds: number): string {
@@ -227,6 +247,17 @@
 			handlePhaseChange();
 		}
 
+		// Update displayed question if not showing correct answer and no pending question
+		if (
+			instructionState.type === 'instruction' &&
+			!pendingQuestion &&
+			gameState.phase.type === 'Playing' &&
+			gameState.phase.data?.currentQuestion &&
+			gameState.phase.data.currentQuestion !== displayedQuestion
+		) {
+			displayedQuestion = gameState.phase.data.currentQuestion;
+		}
+
 		// Check for new events
 		const currentEventCount = streamStore.state.activeEvents.length;
 		if (currentEventCount !== lastEventCount) {
@@ -319,9 +350,9 @@
 
 						<!-- Center: Main content -->
 						<div class="flex-1 text-center">
-							{#if instructionState.type === 'correct-answer'}
-								<div class="space-y-2">
-									<div class="text-2xl font-semibold text-white">
+							<div class="flex min-h-[14rem] flex-col justify-center space-y-2">
+								{#if instructionState.type === 'correct-answer'}
+									<div class="text-6xl leading-tight font-bold text-white">
 										{instructionState.text}
 									</div>
 									{#if instructionState.word}
@@ -332,9 +363,7 @@
 											{instructionState.word}
 										</div>
 									{/if}
-								</div>
-							{:else if instructionState.type === 'game-over'}
-								<div class="space-y-2">
+								{:else if instructionState.type === 'game-over'}
 									<div
 										class="text-4xl font-bold text-yellow-400"
 										transition:scale={{ duration: 600, easing: elasticOut }}
@@ -346,13 +375,13 @@
 											Final Score: {gameState.leaderboard[0]?.points} points
 										</div>
 									{/if}
-								</div>
-							{:else}
-								<div class="space-y-2">
+								{:else if gameState.phase.type === 'Playing' && displayedQuestion && instructionState.type === 'instruction'}
+									<div class="text-6xl leading-tight font-bold text-white">{displayedQuestion}</div>
+								{:else}
 									<div class="text-3xl font-bold text-white">Quiz</div>
 									<div class="text-lg text-white/80">{instructionState.text}</div>
-								</div>
-							{/if}
+								{/if}
+							</div>
 						</div>
 
 						<!-- Right side: Empty for balance -->

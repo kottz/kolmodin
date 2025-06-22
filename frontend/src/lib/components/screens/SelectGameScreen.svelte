@@ -240,7 +240,7 @@
 				>
 					{#if isProcessingCreation}
 						<Loader2 class="mr-2 h-5 w-5 animate-spin" />
-						Creating & Connecting...
+						Creating...
 					{:else}
 						Create Lobby
 					{/if}

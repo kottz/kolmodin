@@ -76,7 +76,12 @@
 							</div>
 							<div class="text-sm">
 								Question: <span class="bg-muted rounded px-1 py-0.5 font-mono text-xs font-medium"
-									>"{guess.correct_word}"</span
+									>"{guess.question}"</span
+								>
+							</div>
+							<div class="text-sm">
+								Answer: <span class="bg-muted rounded px-1 py-0.5 font-mono text-xs font-medium"
+									>"{guess.correct_answer}"</span
 								>
 							</div>
 						</div>

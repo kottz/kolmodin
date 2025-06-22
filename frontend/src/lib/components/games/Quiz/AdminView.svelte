@@ -18,7 +18,8 @@
 
 	const gameState = $derived(quizStore.gameState);
 	const leaderboard = $derived(quizStore.leaderboard);
-	const currentWord = $derived(quizStore.currentWord);
+	const currentQuestion = $derived(quizStore.currentQuestion);
+	const currentAnswer = $derived(quizStore.currentAnswer);
 	const winner = $derived(quizStore.winner);
 	const displayTimer = $derived(quizStore.displayTimer);
 	const currentPhase = $derived(gameState.phase.type);
@@ -81,8 +82,25 @@
 						</p>
 					{:else if currentPhase === 'Playing'}
 						<h2 class="mb-4 text-4xl font-bold">Current Question</h2>
-						<div class="text-primary mb-4 font-mono text-6xl font-bold">
-							{currentWord() || 'Loading...'}
+						<div class="text-primary mb-4 font-mono text-4xl font-bold">
+							{currentQuestion() || 'Loading...'}
+						</div>
+
+						<!-- Answer and Extra Info (Admin Only) -->
+						<div
+							class="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-800 dark:bg-yellow-900/20"
+						>
+							<h3 class="mb-2 text-lg font-semibold text-yellow-800 dark:text-yellow-200">
+								Answer
+							</h3>
+							<div class="mb-2 text-xl font-bold text-yellow-900 dark:text-yellow-100">
+								{currentAnswer() || 'Loading...'}
+							</div>
+							{#if gameState.phase.type === 'Playing' && gameState.phase.data.extra_info}
+								<div class="text-sm text-yellow-700 dark:text-yellow-300">
+									{gameState.phase.data.extra_info}
+								</div>
+							{/if}
 						</div>
 						{#if timeLimitEnabled}
 							<div class="text-muted-foreground text-2xl">
@@ -178,7 +196,7 @@
 							<Button onclick={handleStartGame} class="w-full" size="lg">Start Quiz</Button>
 						{:else if currentPhase === 'Playing'}
 							<div class="flex flex-col gap-2">
-								<Button onclick={quizStore.actions.passWord} variant="outline" class="w-full">
+								<Button onclick={quizStore.actions.passQuestion} variant="outline" class="w-full">
 									Skip Question
 								</Button>
 								<Button onclick={quizStore.actions.resetGame} variant="destructive" class="w-full">

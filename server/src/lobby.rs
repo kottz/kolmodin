@@ -123,6 +123,9 @@ impl LobbyManagerActor {
                 // Get current word list for MedAndraOrd
                 let mao_words = self.word_list_manager.get_med_andra_ord_words().await;
 
+                // Get Trivial Pursuit data for Quiz
+                let trivial_pursuit_data = self.word_list_manager.get_trivial_pursuit_data().await;
+
                 match game_type_str_req.to_lowercase().as_str() {
                     "dealnodeal" | "dealornodeal" => {
                         if !self.games_config.enabled_types.contains("dealnodeal") {
@@ -215,7 +218,7 @@ impl LobbyManagerActor {
                                 .send(Err("Game type 'quiz' is not enabled.".to_string()));
                             return;
                         }
-                        let game_engine = QuizGameState::new(mao_words);
+                        let game_engine = QuizGameState::new(trivial_pursuit_data);
                         actual_game_type_created = game_engine.game_type_id();
                         lobby_actor_handle = LobbyActorHandle::new_spawned::<QuizGameState>(
                             lobby_id,

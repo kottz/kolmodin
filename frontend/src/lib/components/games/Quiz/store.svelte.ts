@@ -12,7 +12,7 @@ const GAME_TYPE_ID = 'Quiz'; // Must match Rust GAME_TYPE_ID
 
 interface QuizStoreActions {
 	startGame: () => void;
-	passWord: () => void;
+	passQuestion: () => void;
 	resetGame: () => void;
 	setTargetPoints: (points: number) => void;
 	setGameDuration: (seconds: number) => void;
@@ -49,10 +49,18 @@ function createQuizStore() {
 			.sort((a, b) => b.points - a.points);
 	});
 
-	// Current word (only visible during Playing phase)
-	const currentWord = $derived(() => {
+	// Current question (only visible during Playing phase)
+	const currentQuestion = $derived(() => {
 		if (gameState.phase.type === 'Playing') {
-			return gameState.phase.data.current_word;
+			return gameState.phase.data.current_question;
+		}
+		return null;
+	});
+
+	// Current answer (only visible during Playing phase)
+	const currentAnswer = $derived(() => {
+		if (gameState.phase.type === 'Playing') {
+			return gameState.phase.data.current_answer;
 		}
 		return null;
 	});
@@ -128,7 +136,7 @@ function createQuizStore() {
 				// Ensure data is serializable
 				data:
 					gameState.phase.type === 'Playing'
-						? { hasWord: true }
+						? { hasQuestion: true, currentQuestion: gameState.phase.data.current_question }
 						: gameState.phase.type === 'GameOver' && gameState.phase.data
 							? { winner: gameState.phase.data.winner }
 							: undefined
@@ -201,24 +209,28 @@ function createQuizStore() {
 				broadcastCurrentGameState();
 				break;
 
-			case 'WordChanged':
-				info(`QuizStore: Question changed to: ${eventPayload.data.word}`);
-				// Add stream event for word change (without revealing the word)
-				streamEventManager.addEvent('WORD_CHANGED', { message: 'New question available!' }, 2000);
+			case 'QuestionChanged':
+				info(`QuizStore: Question changed to: ${eventPayload.data.question}`);
+				// Add stream event for question change
+				streamEventManager.addEvent(
+					'QUESTION_CHANGED',
+					{ message: 'New question available!' },
+					2000
+				);
 				break;
 
 			case 'PlayerScored': {
 				info(`QuizStore: ${eventPayload.data.player} scored! Points: ${eventPayload.data.points}`);
 				gameState.player_scores[eventPayload.data.player] = eventPayload.data.points;
 
-				// Add celebration stream event with current word
-				const currentCorrectWord =
-					gameState.phase.type === 'Playing' ? gameState.phase.data.current_word : '';
+				// Add celebration stream event with current answer
+				const currentCorrectAnswer =
+					gameState.phase.type === 'Playing' ? gameState.phase.data.current_answer : '';
 				streamEventManager.addEvent(
 					'CORRECT_ANSWER',
 					{
 						player: eventPayload.data.player,
-						word: currentCorrectWord,
+						answer: currentCorrectAnswer,
 						points: eventPayload.data.points,
 						message: `🎉 ${eventPayload.data.player} was correct! 🎉`
 					},
@@ -332,7 +344,7 @@ function createQuizStore() {
 
 	const actions: QuizStoreActions = {
 		startGame: () => sendCommand('StartGame'),
-		passWord: () => sendCommand('PassWord'),
+		passQuestion: () => sendCommand('PassQuestion'),
 		resetGame: () => sendCommand('ResetGame'),
 		setTargetPoints: (points: number) => sendCommand('SetTargetPoints', points),
 		setGameDuration: (seconds: number) => sendCommand('SetGameDuration', undefined, seconds),
@@ -360,8 +372,11 @@ function createQuizStore() {
 		get leaderboard() {
 			return leaderboard;
 		},
-		get currentWord() {
-			return currentWord;
+		get currentQuestion() {
+			return currentQuestion;
+		},
+		get currentAnswer() {
+			return currentAnswer;
 		},
 		get winner() {
 			return winner;

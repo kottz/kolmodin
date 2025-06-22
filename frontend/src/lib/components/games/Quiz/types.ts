@@ -4,14 +4,15 @@ export interface RecentGuess {
 	id: string;
 	player: string;
 	guessed_text: string;
-	correct_word: string;
+	correct_answer: string;
+	question: string;
 	timestamp: number;
 }
 
 export interface AdminCommand {
 	command:
 		| 'StartGame'
-		| 'PassWord'
+		| 'PassQuestion'
 		| 'ResetGame'
 		| 'SetTargetPoints'
 		| 'SetGameDuration'
@@ -26,7 +27,10 @@ export interface AdminCommand {
 
 export type GamePhaseType =
 	| { type: 'Setup' }
-	| { type: 'Playing'; data: { current_word: string } }
+	| {
+			type: 'Playing';
+			data: { current_question: string; current_answer: string; extra_info?: string };
+	  }
 	| { type: 'GameOver'; data: { winner: string } };
 
 export interface QuizGameState {
@@ -41,7 +45,10 @@ export interface QuizGameState {
 
 // Public state interface for streaming (safe to broadcast)
 export interface QuizPublicState extends BasePublicGameState {
-	phase: { type: string; data?: unknown };
+	phase: {
+		type: string;
+		data?: { hasQuestion?: boolean; currentQuestion?: string; winner?: string };
+	};
 	targetPoints: number;
 	gameDurationSeconds: number;
 	pointLimitEnabled: boolean;
@@ -53,7 +60,7 @@ export interface QuizPublicState extends BasePublicGameState {
 
 export type GameEventData =
 	| { event_type: 'FullStateUpdate'; data: QuizGameState }
-	| { event_type: 'WordChanged'; data: { word: string } }
+	| { event_type: 'QuestionChanged'; data: { question: string; is_placeholder: boolean } }
 	| { event_type: 'PlayerScored'; data: { player: string; points: number } }
 	| { event_type: 'GamePhaseChanged'; data: { new_phase: GamePhaseType } }
 	| { event_type: 'GameTimeUpdate'; data: { remaining_seconds: number } }
