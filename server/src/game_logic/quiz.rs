@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
-use crate::db::{TrivialPursuitData, TrivialPursuitQuestion};
+use crate::db::{TrivialPursuitData, VemVetMestQuestion};
 use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
@@ -94,7 +94,11 @@ pub struct QuizGameState {
     #[serde(skip)]
     trivial_pursuit_data: Option<Arc<TrivialPursuitData>>,
     #[serde(skip)]
+    vem_vet_mest_data: Option<Arc<Vec<VemVetMestQuestion>>>,
+    #[serde(skip)]
     local_used_question_ids: HashSet<u32>,
+    #[serde(skip)]
+    local_used_vem_vet_mest_indices: HashSet<usize>,
     #[serde(skip)]
     game_start_time: Option<Instant>,
 }
@@ -111,14 +115,19 @@ impl Clone for QuizGameState {
             player_scores: self.player_scores.clone(),
             recent_guesses: self.recent_guesses.clone(),
             trivial_pursuit_data: self.trivial_pursuit_data.clone(),
+            vem_vet_mest_data: self.vem_vet_mest_data.clone(),
             local_used_question_ids: self.local_used_question_ids.clone(),
+            local_used_vem_vet_mest_indices: self.local_used_vem_vet_mest_indices.clone(),
             game_start_time: self.game_start_time,
         }
     }
 }
 
 impl QuizGameState {
-    pub fn new(trivial_pursuit_data: Option<Arc<TrivialPursuitData>>) -> Self {
+    pub fn new(
+        trivial_pursuit_data: Option<Arc<TrivialPursuitData>>,
+        vem_vet_mest_data: Option<Arc<Vec<VemVetMestQuestion>>>,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             phase: GamePhase::Setup,
@@ -129,7 +138,9 @@ impl QuizGameState {
             player_scores: HashMap::new(),
             recent_guesses: Vec::new(),
             trivial_pursuit_data,
+            vem_vet_mest_data,
             local_used_question_ids: HashSet::new(),
+            local_used_vem_vet_mest_indices: HashSet::new(),
             game_start_time: None,
         }
     }
@@ -340,6 +351,7 @@ impl QuizGameState {
         self.phase = GamePhase::Setup;
         self.player_scores.clear();
         self.local_used_question_ids.clear();
+        self.local_used_vem_vet_mest_indices.clear();
         self.recent_guesses.clear();
         self.game_start_time = None;
 
@@ -433,43 +445,130 @@ impl QuizGameState {
     }
 
     fn get_next_question(&mut self) -> Option<(String, String, Option<String>)> {
-        let trivial_pursuit_data = self.trivial_pursuit_data.as_ref()?;
-
-        if trivial_pursuit_data.cards.is_empty() {
-            tracing::warn!("No Trivial Pursuit cards available");
-            return None;
+        // Collect available questions from both sources
+        enum QuestionSource {
+            TrivialPursuit(u32, u32), // (card_id, question_id) - compound key to handle duplicate question IDs across cards
+            VemVetMest(usize),        // index in the array
         }
 
-        // Collect all available questions
-        let mut available_questions: Vec<&TrivialPursuitQuestion> = Vec::new();
-        for card in &trivial_pursuit_data.cards {
-            for question in &card.questions {
-                if !self.local_used_question_ids.contains(&question.id) {
-                    available_questions.push(question);
-                }
-            }
-        }
+        let mut available_sources: Vec<QuestionSource> = Vec::new();
 
-        if available_questions.is_empty() {
-            tracing::info!("All questions used, resetting used questions list for this game");
-            self.local_used_question_ids.clear();
-            // Try again with reset list - get all questions
+        // Add available Trivial Pursuit questions using compound key (card_id, question_id)
+        if let Some(trivial_pursuit_data) = &self.trivial_pursuit_data {
             for card in &trivial_pursuit_data.cards {
                 for question in &card.questions {
-                    available_questions.push(question);
+                    let compound_key = card.id * 1000 + question.id; // Create unique compound key
+                    if !self.local_used_question_ids.contains(&compound_key) {
+                        available_sources
+                            .push(QuestionSource::TrivialPursuit(card.id, question.id));
+                    }
                 }
             }
         }
 
-        if let Some(selected_question) = available_questions.choose(&mut thread_rng()) {
-            Some((
-                selected_question.question.clone(),
-                selected_question.answer.clone(),
-                selected_question.extra_info.clone(),
-            ))
-        } else {
-            None
+        // Add available Vem Vet Mest questions
+        if let Some(vem_vet_mest_data) = &self.vem_vet_mest_data {
+            for (index, _question) in vem_vet_mest_data.iter().enumerate() {
+                if !self.local_used_vem_vet_mest_indices.contains(&index) {
+                    available_sources.push(QuestionSource::VemVetMest(index));
+                }
+            }
         }
+
+        // If no questions available, reset both used sets and try again
+        if available_sources.is_empty() {
+            tracing::info!("All questions from both sources used, resetting used questions lists");
+            self.local_used_question_ids.clear();
+            self.local_used_vem_vet_mest_indices.clear();
+
+            // Rebuild available sources
+            if let Some(trivial_pursuit_data) = &self.trivial_pursuit_data {
+                for card in &trivial_pursuit_data.cards {
+                    for question in &card.questions {
+                        available_sources
+                            .push(QuestionSource::TrivialPursuit(card.id, question.id));
+                    }
+                }
+            }
+
+            if let Some(vem_vet_mest_data) = &self.vem_vet_mest_data {
+                for (index, _question) in vem_vet_mest_data.iter().enumerate() {
+                    available_sources.push(QuestionSource::VemVetMest(index));
+                }
+            }
+        }
+
+        // Randomly select a question source
+        if let Some(selected_source) = available_sources.choose(&mut thread_rng()) {
+            match selected_source {
+                QuestionSource::TrivialPursuit(card_id, question_id) => {
+                    // Find and return the specific Trivial Pursuit question using both card and question ID
+                    if let Some(trivial_pursuit_data) = &self.trivial_pursuit_data {
+                        for card in &trivial_pursuit_data.cards {
+                            if card.id == *card_id {
+                                for question in &card.questions {
+                                    if question.id == *question_id {
+                                        return Some((
+                                            question.question.clone(),
+                                            question.answer.clone(),
+                                            question.extra_info.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                QuestionSource::VemVetMest(index) => {
+                    // Return the Vem Vet Mest question
+                    if let Some(vem_vet_mest_data) = &self.vem_vet_mest_data {
+                        if let Some(question) = vem_vet_mest_data.get(*index) {
+                            return Some((
+                                question.question.clone(),
+                                question.answer.clone(),
+                                question.extra_info.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn mark_question_as_used(&mut self, question: &str, answer: &str) {
+        // Try to find and mark in Trivial Pursuit data using compound key
+        if let Some(trivial_pursuit_data) = &self.trivial_pursuit_data {
+            for card in &trivial_pursuit_data.cards {
+                for tp_question in &card.questions {
+                    if tp_question.question == question && tp_question.answer == answer {
+                        let compound_key = card.id * 1000 + tp_question.id; // Same compound key logic as get_next_question
+                        self.local_used_question_ids.insert(compound_key);
+                        tracing::debug!(
+                            card_id = card.id,
+                            question_id = tp_question.id,
+                            compound_key = compound_key,
+                            "Marked Trivial Pursuit question as used"
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Try to find and mark in Vem Vet Mest data
+        if let Some(vem_vet_mest_data) = &self.vem_vet_mest_data {
+            for (index, vvm_question) in vem_vet_mest_data.iter().enumerate() {
+                if vvm_question.question == question && vvm_question.answer == answer {
+                    self.local_used_vem_vet_mest_indices.insert(index);
+                    tracing::debug!(index = index, "Marked Vem Vet Mest question as used");
+                    return;
+                }
+            }
+        }
+
+        tracing::warn!("Could not find question to mark as used: '{}'", question);
     }
 
     async fn process_correct_guess(
@@ -478,7 +577,6 @@ impl QuizGameState {
         guessed_text: &str,
         correct_answer: &str,
         question: &str,
-        question_id: u32,
     ) {
         if self.check_game_time_expired() {
             self.end_game_time_expired().await;
@@ -491,8 +589,8 @@ impl QuizGameState {
 
         self.add_recent_guess(player, guessed_text, correct_answer, question);
 
-        // Mark question as used
-        self.local_used_question_ids.insert(question_id);
+        // Mark question as used - find it in both sources by matching answer and question
+        self.mark_question_as_used(question, correct_answer);
 
         self.broadcast_game_event_to_all(GameEvent::PlayerScored {
             player: player.to_string(),
@@ -642,24 +740,8 @@ impl GameLogic for QuizGameState {
                 return;
             }
 
-            let trivial_pursuit_data = match &self.trivial_pursuit_data {
-                Some(data) => data,
-                None => return,
-            };
-
             let guess = message.text.trim();
             let answer = current_answer.clone();
-
-            // Find the current question ID to mark it as used
-            let mut question_id = None;
-            'outer: for card in &trivial_pursuit_data.cards {
-                for question in &card.questions {
-                    if question.answer == answer {
-                        question_id = Some(question.id);
-                        break 'outer;
-                    }
-                }
-            }
 
             if is_guess_acceptable(&answer, guess) {
                 tracing::debug!(
@@ -669,22 +751,14 @@ impl GameLogic for QuizGameState {
                     "Correct guess"
                 );
 
-                if let Some(qid) = question_id {
-                    if let GamePhase::Playing {
-                        current_question, ..
-                    } = &self.phase
-                    {
-                        let question = current_question.clone();
-                        self.process_correct_guess(
-                            &message.sender_username,
-                            guess,
-                            &answer,
-                            &question,
-                            qid,
-                        )
+                if let GamePhase::Playing {
+                    current_question, ..
+                } = &self.phase
+                {
+                    let question = current_question.clone();
+                    self.process_correct_guess(&message.sender_username, guess, &answer, &question)
                         .await;
-                        self.broadcast_full_state_update().await;
-                    }
+                    self.broadcast_full_state_update().await;
                 }
             }
         }
@@ -704,5 +778,207 @@ impl GameLogic for QuizGameState {
 
     fn get_all_client_ids(&self) -> Vec<Uuid> {
         self.clients.keys().copied().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{TrivialPursuitCard, TrivialPursuitQuestion};
+
+    #[test]
+    fn test_quiz_with_both_sources() {
+        // Create test Trivial Pursuit data
+        let tp_question = TrivialPursuitQuestion {
+            id: 1,
+            question: "What is 2+2?".to_string(),
+            answer: "4".to_string(),
+            extra_info: None,
+        };
+        let tp_card = TrivialPursuitCard {
+            id: 1,
+            questions: vec![tp_question],
+        };
+        let tp_data = Arc::new(TrivialPursuitData {
+            cards: vec![tp_card],
+        });
+
+        // Create test Vem Vet Mest data
+        let vvm_question = VemVetMestQuestion {
+            question: "What is the capital of Sweden?".to_string(),
+            answer: "Stockholm".to_string(),
+            category: Some("Geography".to_string()),
+            extra_info: None,
+        };
+        let vvm_data = Arc::new(vec![vvm_question]);
+
+        // Create quiz state with both sources
+        let mut quiz_state = QuizGameState::new(Some(tp_data), Some(vvm_data));
+
+        // Get first question - should randomly pick from either source
+        let first_question = quiz_state.get_next_question();
+        assert!(first_question.is_some());
+
+        let (question, answer, _extra_info) = first_question.unwrap();
+
+        // Should be one of our test questions
+        assert!(
+            (question == "What is 2+2?" && answer == "4")
+                || (question == "What is the capital of Sweden?" && answer == "Stockholm")
+        );
+
+        // Mark the question as used
+        quiz_state.mark_question_as_used(&question, &answer);
+
+        // Get second question - should get the other one
+        let second_question = quiz_state.get_next_question();
+        assert!(second_question.is_some());
+
+        let (question2, answer2, _extra_info2) = second_question.unwrap();
+
+        // Should be the other question
+        assert!(question != question2);
+        assert!(answer != answer2);
+
+        // Should be one of our test questions
+        assert!(
+            (question2 == "What is 2+2?" && answer2 == "4")
+                || (question2 == "What is the capital of Sweden?" && answer2 == "Stockholm")
+        );
+    }
+
+    #[test]
+    fn test_quiz_with_only_trivial_pursuit() {
+        // Create test Trivial Pursuit data
+        let tp_question = TrivialPursuitQuestion {
+            id: 1,
+            question: "What is 2+2?".to_string(),
+            answer: "4".to_string(),
+            extra_info: None,
+        };
+        let tp_card = TrivialPursuitCard {
+            id: 1,
+            questions: vec![tp_question],
+        };
+        let tp_data = Arc::new(TrivialPursuitData {
+            cards: vec![tp_card],
+        });
+
+        // Create quiz state with only TP data
+        let mut quiz_state = QuizGameState::new(Some(tp_data), None);
+
+        // Should get the TP question
+        let question_result = quiz_state.get_next_question();
+        assert!(question_result.is_some());
+
+        let (question, answer, _extra_info) = question_result.unwrap();
+        assert_eq!(question, "What is 2+2?");
+        assert_eq!(answer, "4");
+    }
+
+    #[test]
+    fn test_quiz_with_only_vem_vet_mest() {
+        // Create test Vem Vet Mest data
+        let vvm_question = VemVetMestQuestion {
+            question: "What is the capital of Sweden?".to_string(),
+            answer: "Stockholm".to_string(),
+            category: Some("Geography".to_string()),
+            extra_info: None,
+        };
+        let vvm_data = Arc::new(vec![vvm_question]);
+
+        // Create quiz state with only VVM data
+        let mut quiz_state = QuizGameState::new(None, Some(vvm_data));
+
+        // Should get the VVM question
+        let question_result = quiz_state.get_next_question();
+        assert!(question_result.is_some());
+
+        let (question, answer, _extra_info) = question_result.unwrap();
+        assert_eq!(question, "What is the capital of Sweden?");
+        assert_eq!(answer, "Stockholm");
+    }
+
+    #[test]
+    fn test_quiz_handles_duplicate_question_ids_across_cards() {
+        // Create test data with two cards that have questions with the same IDs (1 and 2)
+        // This simulates the real-world scenario where each card has questions 1-6
+        let card1_q1 = TrivialPursuitQuestion {
+            id: 1,
+            question: "Card 1 Question 1".to_string(),
+            answer: "Card 1 Answer 1".to_string(),
+            extra_info: None,
+        };
+        let card1_q2 = TrivialPursuitQuestion {
+            id: 2,
+            question: "Card 1 Question 2".to_string(),
+            answer: "Card 1 Answer 2".to_string(),
+            extra_info: None,
+        };
+        let card1 = TrivialPursuitCard {
+            id: 1,
+            questions: vec![card1_q1, card1_q2],
+        };
+
+        let card2_q1 = TrivialPursuitQuestion {
+            id: 1, // Same ID as card1_q1, but different card
+            question: "Card 2 Question 1".to_string(),
+            answer: "Card 2 Answer 1".to_string(),
+            extra_info: None,
+        };
+        let card2_q2 = TrivialPursuitQuestion {
+            id: 2, // Same ID as card1_q2, but different card
+            question: "Card 2 Question 2".to_string(),
+            answer: "Card 2 Answer 2".to_string(),
+            extra_info: None,
+        };
+        let card2 = TrivialPursuitCard {
+            id: 2,
+            questions: vec![card2_q1, card2_q2],
+        };
+
+        let tp_data = Arc::new(TrivialPursuitData {
+            cards: vec![card1, card2],
+        });
+
+        let mut quiz_state = QuizGameState::new(Some(tp_data), None);
+
+        // Get 4 questions and verify they are all unique
+        let mut questions_seen = std::collections::HashSet::new();
+
+        for i in 0..4 {
+            let question_result = quiz_state.get_next_question();
+            assert!(
+                question_result.is_some(),
+                "Question {} should be available",
+                i + 1
+            );
+
+            let (question, answer, _extra_info) = question_result.unwrap();
+
+            // Verify this is a unique question we haven't seen before
+            assert!(
+                questions_seen.insert(question.clone()),
+                "Question '{}' was already seen, indicating duplicate question selection bug",
+                question
+            );
+
+            // Mark the question as used
+            quiz_state.mark_question_as_used(&question, &answer);
+        }
+
+        // Verify all 4 questions were unique and from both cards
+        assert_eq!(questions_seen.len(), 4);
+        assert!(questions_seen.contains("Card 1 Question 1"));
+        assert!(questions_seen.contains("Card 1 Question 2"));
+        assert!(questions_seen.contains("Card 2 Question 1"));
+        assert!(questions_seen.contains("Card 2 Question 2"));
+
+        // Verify no more questions are available (all used)
+        let no_more_questions = quiz_state.get_next_question();
+        assert!(
+            no_more_questions.is_some(),
+            "Should reset and provide questions again when all are used"
+        );
     }
 }
