@@ -1,5 +1,6 @@
 use std::cmp::min;
 use std::collections::HashMap;
+use unicode_normalization::UnicodeNormalization;
 
 /// Computes the Damerau-Levenshtein distance between two strings,
 /// returning `Some(distance)` if it's less than or equal to a given
@@ -147,6 +148,39 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
     }
 }
 
+/// Normalizes text by converting to lowercase and removing diacritics/accents.
+/// This allows "pelé" and "pele" to be treated as equivalent.
+///
+/// # Arguments
+///
+/// * `text`: The input text to normalize.
+///
+/// # Returns
+///
+/// A normalized string with lowercase characters and no diacritics.
+fn normalize_text(text: &str) -> String {
+    // Convert to lowercase first
+    let lowercase = text.to_lowercase();
+
+    // Normalize Unicode characters using NFD (canonical decomposition)
+    // This separates base characters from their combining diacritical marks
+    let normalized: String = lowercase.nfd().collect();
+
+    // Filter out combining diacritical marks
+    // Most combining marks are in the range U+0300..U+036F
+    // This effectively removes accents, cedillas, tildes, etc.
+    normalized
+        .chars()
+        .filter(|&ch| {
+            // Keep only characters that are NOT in the combining diacritical marks range
+            let code_point = ch as u32;
+            !(0x0300..=0x036F).contains(&code_point) && // Combining Diacritical Marks
+            !(0x1AB0..=0x1AFF).contains(&code_point) && // Combining Diacritical Marks Extended
+            !(0x1DC0..=0x1DFF).contains(&code_point) // Combining Diacritical Marks Supplement
+        })
+        .collect()
+}
+
 /// Determines an adaptive Damerau-Levenshtein threshold based on the target word's length.
 ///
 /// # Arguments
@@ -190,9 +224,9 @@ fn determine_adaptive_threshold(target_word_len: usize) -> usize {
 ///
 /// `true` if the guess is considered acceptable, `false` otherwise.
 pub fn is_guess_acceptable(target_word: &str, guessed_word: &str) -> bool {
-    // 1. Preprocessing
-    let processed_target = target_word.to_lowercase();
-    let processed_guess = guessed_word.trim().to_lowercase();
+    // 1. Preprocessing - normalize text to handle accented characters
+    let processed_target = normalize_text(target_word);
+    let processed_guess = normalize_text(guessed_word.trim());
 
     // Handle empty guess: usually not acceptable unless target is also empty.
     if processed_guess.is_empty() {
@@ -482,5 +516,113 @@ mod tests_damerau_levenshtein {
         // Test early exit on length difference
         assert_eq!(damerau_levenshtein_threshold("a", "abcdef", 3), None); // length diff 5 > threshold 3
         assert_eq!(damerau_levenshtein_threshold("a", "abcd", 3), Some(3)); // length diff 3 <= threshold 3
+    }
+}
+
+#[cfg(test)]
+mod tests_is_guess_acceptable {
+    use super::*;
+
+    #[test]
+    fn test_exact_matches() {
+        assert!(is_guess_acceptable("test", "test"));
+        assert!(is_guess_acceptable("hello", "hello"));
+        assert!(is_guess_acceptable("", ""));
+    }
+
+    #[test]
+    fn test_case_insensitive() {
+        assert!(is_guess_acceptable("Test", "test"));
+        assert!(is_guess_acceptable("HELLO", "hello"));
+        assert!(is_guess_acceptable("MiXeD", "mixed"));
+    }
+
+    #[test]
+    fn test_accented_characters() {
+        // Test that accented characters are normalized
+        assert!(is_guess_acceptable("pelé", "pele"));
+        assert!(is_guess_acceptable("pele", "pelé"));
+        assert!(is_guess_acceptable("café", "cafe"));
+        assert!(is_guess_acceptable("naïve", "naive"));
+        assert!(is_guess_acceptable("résumé", "resume"));
+        assert!(is_guess_acceptable("piñata", "pinata"));
+        assert!(is_guess_acceptable("Zürich", "zurich"));
+        assert!(is_guess_acceptable("São Paulo", "sao paulo"));
+    }
+
+    #[test]
+    fn test_mixed_case_and_accents() {
+        assert!(is_guess_acceptable("PELÉ", "pele"));
+        assert!(is_guess_acceptable("Café", "CAFE"));
+        assert!(is_guess_acceptable("résumé", "RESUME"));
+    }
+
+    #[test]
+    fn test_first_letter_requirement() {
+        // First letter must match (after normalization)
+        assert!(!is_guess_acceptable("test", "best"));
+        assert!(!is_guess_acceptable("hello", "jello"));
+
+        // But accented first letters should work
+        assert!(is_guess_acceptable("élite", "elite"));
+        assert!(is_guess_acceptable("ñoño", "nono")); // if within distance threshold
+    }
+
+    #[test]
+    fn test_typo_tolerance() {
+        // Test that small typos are acceptable based on word length
+        // Words <= 5 chars have threshold 0 (exact match only)
+        assert!(!is_guess_acceptable("hello", "helo")); // 5 chars, threshold 0
+        assert!(!is_guess_acceptable("test", "tset")); // 4 chars, threshold 0
+        assert!(!is_guess_acceptable("world", "worl")); // 5 chars, threshold 0
+
+        // Words > 5 chars allow typos (threshold 2)
+        assert!(is_guess_acceptable("hackspett", "hackspet")); // 9 chars, threshold 2, deletion
+        assert!(is_guess_acceptable("vitkål", "vitåkl")); // 6 chars, threshold 2, transposition
+        assert!(is_guess_acceptable("holland", "hollan")); // 7 chars, threshold 2, deletion
+    }
+
+    #[test]
+    fn test_whitespace_handling() {
+        assert!(is_guess_acceptable("test", " test "));
+        assert!(is_guess_acceptable("hello world", "hello world"));
+        assert!(is_guess_acceptable("test", "  test  "));
+    }
+}
+
+#[cfg(test)]
+mod tests_normalize_text {
+    use super::*;
+
+    #[test]
+    fn test_basic_normalization() {
+        assert_eq!(normalize_text("Hello"), "hello");
+        assert_eq!(normalize_text("WORLD"), "world");
+        assert_eq!(normalize_text("Test123"), "test123");
+    }
+
+    #[test]
+    fn test_accent_removal() {
+        assert_eq!(normalize_text("pelé"), "pele");
+        assert_eq!(normalize_text("café"), "cafe");
+        assert_eq!(normalize_text("naïve"), "naive");
+        assert_eq!(normalize_text("résumé"), "resume");
+        assert_eq!(normalize_text("piñata"), "pinata");
+        assert_eq!(normalize_text("Zürich"), "zurich");
+        assert_eq!(normalize_text("São Paulo"), "sao paulo");
+    }
+
+    #[test]
+    fn test_mixed_case_and_accents() {
+        assert_eq!(normalize_text("PELÉ"), "pele");
+        assert_eq!(normalize_text("Café"), "cafe");
+        assert_eq!(normalize_text("RÉSUMÉ"), "resume");
+    }
+
+    #[test]
+    fn test_no_change_needed() {
+        assert_eq!(normalize_text("hello"), "hello");
+        assert_eq!(normalize_text("world"), "world");
+        assert_eq!(normalize_text("test123"), "test123");
     }
 }
