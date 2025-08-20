@@ -78,7 +78,7 @@ pub async fn run_irc_connection_loop(
                 );
                 return;
             }
-            connection_result = connect_and_listen_irc_single_attempt_adapted(
+            connection_result = run_irc_session(
                 channel_name.clone(),
                 actor_id_for_logging,
                 &token_provider,
@@ -283,7 +283,7 @@ async fn process_connection_result(
     }
 }
 
-async fn connect_and_listen_irc_single_attempt_adapted(
+async fn run_irc_session(
     channel_name: String,
     actor_id_for_logging: Uuid,
     token_provider: &TokenProvider,
