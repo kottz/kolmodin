@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -13,7 +14,6 @@ mod web;
 use crate::config::load_settings;
 use crate::content::GameContentCache;
 use crate::error::Result as AppResult;
-use crate::lobby::LobbyManagerHandle;
 use crate::state::AppState;
 use crate::twitch::TokenProvider;
 use crate::twitch::TwitchChatManagerActorHandle;
@@ -61,30 +61,28 @@ async fn main() -> AppResult<()> {
         TwitchChatManagerActorHandle::spawn(token_provider.clone(), 32, 32);
     tracing::info!("TwitchChatManagerActor created");
 
+    let active_lobbies = Arc::new(DashMap::new());
     let server_config_for_state = Arc::new(app_settings.server.clone());
-
-    let lobby_manager_handle = LobbyManagerHandle::spawn(
-        32,
-        twitch_chat_manager_handle.clone(),
-        app_settings.games.clone(),
-        Arc::clone(&game_content_cache),
-        Arc::new(app_settings.clone()),
-    );
-    tracing::info!("LobbyManagerActor created");
+    let shared_app_settings = Arc::new(app_settings.clone());
+    let games_config = app_settings.games.clone();
+    let server_config_for_run = app_settings.server.clone();
 
     let app_state = AppState {
-        lobby_manager: lobby_manager_handle,
+        active_lobbies,
         game_content_cache,
         server_config: server_config_for_state,
+        games_config,
+        twitch_chat_manager: twitch_chat_manager_handle,
+        app_settings: shared_app_settings,
     };
 
     tracing::info!(
-        server.port = app_settings.server.port,
-        server.cors_origins.count = app_settings.server.cors_origins.len(),
+        server.port = server_config_for_run.port,
+        server.cors_origins.count = server_config_for_run.cors_origins.len(),
         "Starting HTTP server"
     );
 
-    run_server(app_state, app_settings.server).await?;
+    run_server(app_state, server_config_for_run).await?;
 
     tracing::info!("Application shutting down");
     Ok(())

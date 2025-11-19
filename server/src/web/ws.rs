@@ -40,11 +40,7 @@ pub async fn handle_connection(socket: WebSocket, app_state: AppState) {
                         client_id,
                         received_lobby_id
                     );
-                    match app_state
-                        .lobby_manager
-                        .get_lobby_handle(received_lobby_id)
-                        .await
-                    {
+                    match app_state.get_lobby_handle(received_lobby_id) {
                         Some(handle) => {
                             lobby_handle = handle;
                         }

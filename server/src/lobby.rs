@@ -1,9 +1,9 @@
 use axum::extract::ws;
+use dashmap::DashMap;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -25,368 +25,195 @@ pub struct LobbyDetails {
     pub twitch_channel_subscribed: Option<String>,
 }
 
-#[derive(Debug)]
-pub enum LobbyManagerMessage {
-    CreateLobby {
-        requested_game_type: Option<String>,
-        requested_twitch_channel: Option<String>,
-        respond_to: oneshot::Sender<Result<LobbyDetails, String>>,
-    },
-    GetLobbyHandle {
-        lobby_id: Uuid,
-        respond_to: oneshot::Sender<Option<LobbyActorHandle>>,
-    },
-    LobbyActorShutdown {
-        lobby_id: Uuid,
-    },
-}
-
-pub struct LobbyManagerActor {
-    receiver: mpsc::Receiver<LobbyManagerMessage>,
-    lobbies: HashMap<Uuid, LobbyActorHandle>,
-    self_sender: mpsc::Sender<LobbyManagerMessage>,
-    twitch_chat_manager_handle: TwitchChatManagerActorHandle,
+#[allow(clippy::too_many_arguments)]
+pub async fn create_lobby(
+    active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
     games_config: GamesConfig,
     content_cache: Arc<GameContentCache>,
+    twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     app_settings: Arc<AppSettings>,
-}
+    requested_game_type: Option<String>,
+    requested_twitch_channel: Option<String>,
+) -> Result<LobbyDetails, String> {
+    let lobby_id = Uuid::new_v4();
+    let admin_id = Uuid::new_v4();
+    let requested_game_type = requested_game_type
+        .clone()
+        .unwrap_or_else(|| "medandraord".to_string());
 
-impl LobbyManagerActor {
-    fn new(
-        receiver: mpsc::Receiver<LobbyManagerMessage>,
-        self_sender: mpsc::Sender<LobbyManagerMessage>,
-        twitch_chat_manager_handle: TwitchChatManagerActorHandle,
-        games_config: GamesConfig,
-        content_cache: Arc<GameContentCache>,
-        app_settings: Arc<AppSettings>,
-    ) -> Self {
-        LobbyManagerActor {
-            receiver,
-            lobbies: HashMap::new(),
-            self_sender,
-            twitch_chat_manager_handle,
-            games_config,
-            content_cache,
-            app_settings,
-        }
-    }
+    tracing::info!(
+        lobby.id = %lobby_id,
+        request.game_type = %requested_game_type,
+        request.twitch_channel = ?requested_twitch_channel,
+        "Received create lobby request"
+    );
 
-    #[tracing::instrument(skip(self, msg), fields(
-        msg_type = %std::any::type_name_of_val(&msg)
-    ))]
-    async fn handle_message(&mut self, msg: LobbyManagerMessage) {
-        match msg {
-            LobbyManagerMessage::CreateLobby {
-                requested_game_type,
-                requested_twitch_channel,
-                respond_to,
-            } => {
-                let lobby_id = Uuid::new_v4();
-                let admin_id = Uuid::new_v4();
-                let game_type_str_req = requested_game_type
-                    .clone()
-                    .unwrap_or_else(|| "medandraord".to_string());
-
-                tracing::info!(
-                    lobby.id = %lobby_id,
-                    request.game_type = %game_type_str_req,
-                    request.twitch_channel = ?requested_twitch_channel,
-                    "Received CreateLobby request"
-                );
-
-                // Validate Twitch channel if requested
-                if let Some(channel_name) = requested_twitch_channel.as_ref()
-                    && !self
-                        .content_cache
-                        .is_twitch_channel_allowed(channel_name)
-                        .await
-                {
-                    tracing::warn!(
-                        lobby.id = %lobby_id,
-                        twitch.channel = %channel_name,
-                        "Twitch channel not allowed for lobby creation"
-                    );
-                    let _ = respond_to.send(Err(format!(
-                        "Twitch channel '{}' is not in the allowed channels list.",
-                        channel_name
-                    )));
-                    return;
-                }
-
-                let manager_handle = LobbyManagerHandle {
-                    sender: self.self_sender.clone(),
-                };
-                let lobby_actor_handle: LobbyActorHandle;
-                let actual_game_type_created: String;
-
-                // Get current word list for MedAndraOrd
-                let medandraord_words = self.content_cache.medandraord_words().await;
-
-                // Get Trivial Pursuit data for Quiz
-                let trivial_pursuit_data = self.content_cache.trivial_pursuit_data().await;
-
-                // Get Vem Vet Mest data for Quiz
-                let vem_vet_mest_data = self.content_cache.vem_vet_mest_questions().await;
-
-                match game_type_str_req.to_lowercase().as_str() {
-                    "dealnodeal" | "dealornodeal" => {
-                        if !self.games_config.enabled_types.contains("dealnodeal") {
-                            tracing::error!(
-                                lobby.id = %lobby_id,
-                                game.type = "dealnodeal",
-                                "Game type not enabled"
-                            );
-                            let _ = respond_to
-                                .send(Err("Game type 'dealnodeal' is not enabled.".to_string()));
-                            return;
-                        }
-                        let game_engine = DealNoDealGame::new();
-                        actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::spawn::<DealNoDealGame>(
-                            lobby_id,
-                            32,
-                            manager_handle,
-                            game_engine,
-                            requested_twitch_channel.clone(),
-                            self.twitch_chat_manager_handle.clone(),
-                        );
-                    }
-                    "medandraord" | "medandra" | "ord" => {
-                        if !self.games_config.enabled_types.contains("medandraord") {
-                            tracing::error!(
-                                lobby.id = %lobby_id,
-                                game.type = "medandraord",
-                                "Game type not enabled"
-                            );
-                            let _ = respond_to
-                                .send(Err("Game type 'medandraord' is not enabled.".to_string()));
-                            return;
-                        }
-                        let game_engine = MedAndraOrdGame::new(medandraord_words.clone());
-                        actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::spawn::<MedAndraOrdGame>(
-                            lobby_id,
-                            32,
-                            manager_handle.clone(),
-                            game_engine,
-                            requested_twitch_channel.clone(),
-                            self.twitch_chat_manager_handle.clone(),
-                        );
-                    }
-                    "clipqueue" | "queue" => {
-                        if !self.games_config.enabled_types.contains("clipqueue") {
-                            tracing::error!(
-                                lobby.id = %lobby_id,
-                                game.type = "clipqueue",
-                                "Game type not enabled"
-                            );
-                            let _ = respond_to
-                                .send(Err("Game type 'clipqueue' is not enabled.".to_string()));
-                            return;
-                        }
-
-                        // Check if YouTube API is configured for ClipQueue
-                        if self.app_settings.youtube.is_none() {
-                            tracing::error!(
-                                lobby.id = %lobby_id,
-                                game.type = "clipqueue",
-                                "YouTube API not configured for ClipQueue game"
-                            );
-                            let _ = respond_to.send(Err(
-                                "ClipQueue requires YouTube API configuration. Please set KOLMODIN__YOUTUBE__API_KEY environment variable.".to_string()
-                            ));
-                            return;
-                        }
-
-                        let game_engine = ClipQueueGame::new(self.app_settings.clone());
-                        actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::spawn::<ClipQueueGame>(
-                            lobby_id,
-                            32,
-                            manager_handle.clone(),
-                            game_engine,
-                            requested_twitch_channel.clone(),
-                            self.twitch_chat_manager_handle.clone(),
-                        );
-                    }
-                    "quiz" => {
-                        if !self.games_config.enabled_types.contains("quiz") {
-                            tracing::error!(
-                                lobby.id = %lobby_id,
-                                game.type = "quiz",
-                                "Game type not enabled"
-                            );
-                            let _ = respond_to
-                                .send(Err("Game type 'quiz' is not enabled.".to_string()));
-                            return;
-                        }
-                        let game_engine =
-                            QuizGame::new(trivial_pursuit_data, Some(vem_vet_mest_data));
-                        actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::spawn::<QuizGame>(
-                            lobby_id,
-                            32,
-                            manager_handle.clone(),
-                            game_engine,
-                            requested_twitch_channel.clone(),
-                            self.twitch_chat_manager_handle.clone(),
-                        );
-                    }
-                    unknown => {
-                        tracing::warn!(
-                            lobby.id = %lobby_id,
-                            game.type.requested = %unknown,
-                            game.type.fallback = "medandraord",
-                            "Unknown game type, defaulting to MedAndraOrd"
-                        );
-                        if !self.games_config.enabled_types.contains("medandraord") {
-                            tracing::error!(
-                                lobby.id = %lobby_id,
-                                game.type.requested = %unknown,
-                                game.type.fallback = "medandraord",
-                                "Default game type not enabled for unknown request"
-                            );
-                            let _ = respond_to.send(Err(format!(
-                                "Default game type 'medandraord' is not enabled for unknown request '{}'.", unknown
-                            )));
-                            return;
-                        }
-                        let game_engine = MedAndraOrdGame::new(medandraord_words.clone());
-                        actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::spawn::<MedAndraOrdGame>(
-                            lobby_id,
-                            32,
-                            manager_handle.clone(),
-                            game_engine,
-                            requested_twitch_channel.clone(),
-                            self.twitch_chat_manager_handle.clone(),
-                        );
-                    }
-                };
-
-                self.lobbies.insert(lobby_id, lobby_actor_handle);
-
-                tracing::info!(
-                    lobby.id = %lobby_id,
-                    admin.id = %admin_id,
-                    game.type = %actual_game_type_created,
-                    twitch.channel = ?requested_twitch_channel,
-                    "Created lobby successfully"
-                );
-
-                let _ = respond_to.send(Ok(LobbyDetails {
-                    lobby_id,
-                    admin_id,
-                    game_type_created: actual_game_type_created,
-                    twitch_channel_subscribed: requested_twitch_channel,
-                }));
-            }
-            LobbyManagerMessage::GetLobbyHandle {
-                lobby_id,
-                respond_to,
-            } => {
-                tracing::debug!(
-                    lobby.id = %lobby_id,
-                    "Received GetLobbyHandle request"
-                );
-                let handle = self.lobbies.get(&lobby_id).cloned();
-                let _ = respond_to.send(handle);
-            }
-            LobbyManagerMessage::LobbyActorShutdown { lobby_id } => {
-                if self.lobbies.remove(&lobby_id).is_some() {
-                    tracing::info!(
-                        lobby.id = %lobby_id,
-                        "Cleaning up lobby after actor shutdown"
-                    );
-                } else {
-                    tracing::warn!(
-                        lobby.id = %lobby_id,
-                        "Received shutdown for unknown lobby"
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[tracing::instrument(skip(actor))]
-pub async fn run_lobby_manager_actor(mut actor: LobbyManagerActor) {
-    tracing::info!("LobbyManager actor started");
-    while let Some(msg) = actor.receiver.recv().await {
-        actor.handle_message(msg).await;
-    }
-    tracing::info!("LobbyManager actor stopped");
-}
-
-#[derive(Clone, Debug)]
-pub struct LobbyManagerHandle {
-    sender: mpsc::Sender<LobbyManagerMessage>,
-}
-
-impl LobbyManagerHandle {
-    pub fn spawn(
-        buffer_size: usize,
-        twitch_chat_manager_handle: TwitchChatManagerActorHandle,
-        games_config: GamesConfig,
-        content_cache: Arc<GameContentCache>,
-        app_settings: Arc<AppSettings>,
-    ) -> Self {
-        let (sender, receiver) = mpsc::channel(buffer_size);
-        let actor = LobbyManagerActor::new(
-            receiver,
-            sender.clone(),
-            twitch_chat_manager_handle,
-            games_config,
-            content_cache,
-            app_settings,
+    if let Some(channel_name) = requested_twitch_channel.as_ref()
+        && !content_cache.is_twitch_channel_allowed(channel_name).await
+    {
+        tracing::warn!(
+            lobby.id = %lobby_id,
+            twitch.channel = %channel_name,
+            "Twitch channel not allowed for lobby creation"
         );
-        let handle = Self {
-            sender: sender.clone(),
-        };
-        tokio::spawn(run_lobby_manager_actor(actor));
-        handle
+        return Err(format!(
+            "Twitch channel '{}' is not in the allowed channels list.",
+            channel_name
+        ));
     }
 
-    pub async fn create_lobby(
-        &self,
-        requested_game_type: Option<String>,
-        requested_twitch_channel: Option<String>,
-    ) -> Result<LobbyDetails, String> {
-        let (respond_to, rx) = oneshot::channel();
-        self.sender
-            .send(LobbyManagerMessage::CreateLobby {
-                requested_game_type,
-                requested_twitch_channel,
-                respond_to,
-            })
-            .await
-            .map_err(|e| format!("Failed to send CreateLobby: {}", e))?;
-        rx.await
-            .map_err(|e| format!("LobbyManager no response: {}", e))?
-    }
+    let medandraord_words = content_cache.medandraord_words().await;
+    let trivial_pursuit_data = content_cache.trivial_pursuit_data().await;
+    let vem_vet_mest_data = content_cache.vem_vet_mest_questions().await;
 
-    pub async fn get_lobby_handle(&self, lobby_id: Uuid) -> Option<LobbyActorHandle> {
-        let (tx, rx) = oneshot::channel();
-        if self
-            .sender
-            .send(LobbyManagerMessage::GetLobbyHandle {
+    let (game_type_created, lobby_actor_handle) = match requested_game_type.to_lowercase().as_str()
+    {
+        "dealnodeal" | "dealornodeal" => {
+            if !games_config.enabled_types.contains("dealnodeal") {
+                tracing::error!(
+                    lobby.id = %lobby_id,
+                    game.type = "dealnodeal",
+                    "Game type not enabled"
+                );
+                return Err("Game type 'dealnodeal' is not enabled.".to_string());
+            }
+            let game_engine = DealNoDealGame::new();
+            let game_type_id = game_engine.game_type_id();
+            let handle = LobbyActorHandle::spawn::<DealNoDealGame>(
                 lobby_id,
-                respond_to: tx,
-            })
-            .await
-            .is_err()
-        {
-            return None;
+                32,
+                Arc::clone(&active_lobbies),
+                game_engine,
+                requested_twitch_channel.clone(),
+                twitch_chat_manager_handle.clone(),
+            );
+            (game_type_id, handle)
         }
-        rx.await.ok().flatten()
-    }
+        "medandraord" | "medandra" | "ord" => {
+            if !games_config.enabled_types.contains("medandraord") {
+                tracing::error!(
+                    lobby.id = %lobby_id,
+                    game.type = "medandraord",
+                    "Game type not enabled"
+                );
+                return Err("Game type 'medandraord' is not enabled.".to_string());
+            }
+            let game_engine = MedAndraOrdGame::new(medandraord_words.clone());
+            let game_type_id = game_engine.game_type_id();
+            let handle = LobbyActorHandle::spawn::<MedAndraOrdGame>(
+                lobby_id,
+                32,
+                Arc::clone(&active_lobbies),
+                game_engine,
+                requested_twitch_channel.clone(),
+                twitch_chat_manager_handle.clone(),
+            );
+            (game_type_id, handle)
+        }
+        "clipqueue" | "queue" => {
+            if !games_config.enabled_types.contains("clipqueue") {
+                tracing::error!(
+                    lobby.id = %lobby_id,
+                    game.type = "clipqueue",
+                    "Game type not enabled"
+                );
+                return Err("Game type 'clipqueue' is not enabled.".to_string());
+            }
 
-    pub async fn notify_lobby_shutdown(&self, lobby_id: Uuid) -> Result<(), String> {
-        self.sender
-            .send(LobbyManagerMessage::LobbyActorShutdown { lobby_id })
-            .await
-            .map_err(|e| format!("Failed to send LobbyActorShutdown: {}", e))
-    }
+            if app_settings.youtube.is_none() {
+                tracing::error!(
+                    lobby.id = %lobby_id,
+                    game.type = "clipqueue",
+                    "YouTube API not configured for ClipQueue game"
+                );
+                return Err(
+                    "ClipQueue requires YouTube API configuration. Please set KOLMODIN__YOUTUBE__API_KEY environment variable."
+                        .to_string(),
+                );
+            }
+
+            let game_engine = ClipQueueGame::new(app_settings.clone());
+            let game_type_id = game_engine.game_type_id();
+            let handle = LobbyActorHandle::spawn::<ClipQueueGame>(
+                lobby_id,
+                32,
+                Arc::clone(&active_lobbies),
+                game_engine,
+                requested_twitch_channel.clone(),
+                twitch_chat_manager_handle.clone(),
+            );
+            (game_type_id, handle)
+        }
+        "quiz" => {
+            if !games_config.enabled_types.contains("quiz") {
+                tracing::error!(
+                    lobby.id = %lobby_id,
+                    game.type = "quiz",
+                    "Game type not enabled"
+                );
+                return Err("Game type 'quiz' is not enabled.".to_string());
+            }
+            let game_engine = QuizGame::new(trivial_pursuit_data, Some(vem_vet_mest_data));
+            let game_type_id = game_engine.game_type_id();
+            let handle = LobbyActorHandle::spawn::<QuizGame>(
+                lobby_id,
+                32,
+                Arc::clone(&active_lobbies),
+                game_engine,
+                requested_twitch_channel.clone(),
+                twitch_chat_manager_handle.clone(),
+            );
+            (game_type_id, handle)
+        }
+        unknown => {
+            tracing::warn!(
+                lobby.id = %lobby_id,
+                game.type.requested = %unknown,
+                game.type.fallback = "medandraord",
+                "Unknown game type, defaulting to MedAndraOrd"
+            );
+            if !games_config.enabled_types.contains("medandraord") {
+                tracing::error!(
+                    lobby.id = %lobby_id,
+                    game.type.requested = %unknown,
+                    game.type.fallback = "medandraord",
+                    "Default game type not enabled for unknown request"
+                );
+                return Err(format!(
+                    "Default game type 'medandraord' is not enabled for unknown request '{}'.",
+                    unknown
+                ));
+            }
+            let game_engine = MedAndraOrdGame::new(medandraord_words.clone());
+            let game_type_id = game_engine.game_type_id();
+            let handle = LobbyActorHandle::spawn::<MedAndraOrdGame>(
+                lobby_id,
+                32,
+                Arc::clone(&active_lobbies),
+                game_engine,
+                requested_twitch_channel.clone(),
+                twitch_chat_manager_handle.clone(),
+            );
+            (game_type_id, handle)
+        }
+    };
+
+    active_lobbies.insert(lobby_id, lobby_actor_handle);
+
+    tracing::info!(
+        lobby.id = %lobby_id,
+        admin.id = %admin_id,
+        game.type = %game_type_created,
+        twitch.channel = ?requested_twitch_channel,
+        "Created lobby successfully"
+    );
+
+    Ok(LobbyDetails {
+        lobby_id,
+        admin_id,
+        game_type_created,
+        twitch_channel_subscribed: requested_twitch_channel,
+    })
 }
 
 #[derive(Debug)]
@@ -410,7 +237,7 @@ pub struct LobbyActor<G: GameLogic + Send + 'static> {
     receiver: mpsc::Receiver<LobbyActorMessage>,
     lobby_id: Uuid,
     game_engine: G,
-    manager_handle: LobbyManagerHandle,
+    active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
     twitch_channel_name: Option<String>,
     twitch_status_receiver: Option<tokio::sync::watch::Receiver<TwitchChannelConnectionStatus>>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
@@ -424,7 +251,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
         receiver: mpsc::Receiver<LobbyActorMessage>,
         lobby_id: Uuid,
         game_engine: G,
-        manager_handle: LobbyManagerHandle,
+        active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
         twitch_channel_name: Option<String>,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     ) -> Self {
@@ -432,13 +259,24 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             receiver,
             lobby_id,
             game_engine,
-            manager_handle,
+            active_lobbies,
             twitch_channel_name,
             twitch_chat_manager_handle,
             twitch_subscribed: false,
             twitch_status_receiver: None,
             _twitch_message_task_handle: None,
             _twitch_status_task_handle: None,
+        }
+    }
+
+    fn unregister_from_registry(&self) {
+        if self.active_lobbies.remove(&self.lobby_id).is_some() {
+            tracing::info!(lobby.id = %self.lobby_id, "Removed lobby from active map");
+        } else {
+            tracing::debug!(
+                lobby.id = %self.lobby_id,
+                "Lobby already removed from active map"
+            );
         }
     }
 
@@ -494,17 +332,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                                     tracing::info!(
                                         "Lobby is now empty after client leave request. Triggering shutdown"
                                     );
-                                    if let Err(e) = self
-                                        .manager_handle
-                                        .notify_lobby_shutdown(self.lobby_id)
-                                        .await
-                                    {
-                                        tracing::error!(
-                                            error = %e,
-                                            "Failed to notify LobbyManager of shutdown after client leave request"
-                                        );
-                                    }
-                                    return true; // Signal that the lobby should shut down
+                                    return true;
                                 }
                             }
                         }
@@ -567,17 +395,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                     tracing::info!(
                         "Lobby is now empty after client disconnection. Triggering shutdown"
                     );
-                    if let Err(e) = self
-                        .manager_handle
-                        .notify_lobby_shutdown(self.lobby_id)
-                        .await
-                    {
-                        tracing::error!(
-                            error = %e,
-                            "Failed to notify LobbyManager of shutdown after last client disconnected"
-                        );
-                    }
-                    return true; // Signal that the lobby should shut down
+                    return true;
                 }
             }
             LobbyActorMessage::InternalTwitchMessage(twitch_msg) => {
@@ -855,18 +673,13 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
             }
             _ = tokio::time::sleep_until(last_client_ws_activity + client_ws_inactivity_timeout_duration), if !actor.game_engine.is_empty() => {
                  // Only run inactivity timeout if there are clients.
-                tracing::info!("Lobby inactivity timeout. Notifying manager for shutdown");
-                if let Err(e) = actor.manager_handle.notify_lobby_shutdown(actor.lobby_id).await {
-                    tracing::error!(
-                        error = %e,
-                        "Failed to notify LobbyManager of shutdown"
-                    );
-                }
+                tracing::info!("Lobby inactivity timeout. Shutting down lobby");
                 break;
             }
         }
     }
 
+    actor.unregister_from_registry();
     tracing::info!("Lobby actor stopping");
 
     // Only unsubscribe if we actually subscribed to a Twitch channel
@@ -913,7 +726,7 @@ impl LobbyActorHandle {
     pub fn spawn<G: GameLogic + Send + 'static>(
         lobby_id: Uuid,
         buffer_size: usize,
-        lobby_manager_handle: LobbyManagerHandle,
+        active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
         game_engine_instance: G,
         twitch_channel_name: Option<String>,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
@@ -923,7 +736,7 @@ impl LobbyActorHandle {
             receiver,
             lobby_id,
             game_engine_instance,
-            lobby_manager_handle,
+            active_lobbies,
             twitch_channel_name,
             twitch_chat_manager_handle,
         );

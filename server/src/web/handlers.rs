@@ -33,7 +33,6 @@ pub async fn create_lobby_handler(
     tracing::debug!("Processing create lobby request");
 
     let details = app_state
-        .lobby_manager
         .create_lobby(payload.game_type, payload.twitch_channel)
         .await
         .map_err(|e| {
