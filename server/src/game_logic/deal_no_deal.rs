@@ -868,9 +868,7 @@ impl GameLogic for DealNoDealGame {
         let (is_valid, parsed_vote_value_opt) =
             self.validate_and_parse_twitch_vote(message.text.trim(), &current_phase_clone);
 
-        if is_valid
-            && let Some(vote_value_str) = parsed_vote_value_opt
-        {
+        if is_valid && let Some(vote_value_str) = parsed_vote_value_opt {
             let voter_username = message.sender_username;
 
             self.current_votes_by_user

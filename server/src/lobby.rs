@@ -752,11 +752,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
 
             match self
                 .twitch_chat_manager_handle
-                .subscribe_to_channel(
-                    channel_name.clone(),
-                    self.lobby_id,
-                    tx_for_lobby_messages,
-                )
+                .subscribe_to_channel(channel_name.clone(), self.lobby_id, tx_for_lobby_messages)
                 .await
             {
                 Ok(status_receiver) => {
@@ -777,9 +773,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                                 .await
                                 .is_err()
                             {
-                                tracing::warn!(
-                                    "Failed to send internal Twitch message to self"
-                                );
+                                tracing::warn!("Failed to send internal Twitch message to self");
                                 break;
                             }
                         }

@@ -60,64 +60,6 @@ pub struct GameContentSnapshot {
     pub vem_vet_mest: Vec<VemVetMestQuestion>,
 }
 
-#[async_trait::async_trait]
-pub trait ContentSource {
-    async fn load(&self) -> Result<String, DbError>;
-}
-
-pub struct FileContentSource {
-    file_path: String,
-}
-
-impl FileContentSource {
-    pub fn new(file_path: String) -> Self {
-        Self { file_path }
-    }
-}
-
-#[async_trait::async_trait]
-impl ContentSource for FileContentSource {
-    #[tracing::instrument(skip(self), fields(file.path = %self.file_path))]
-    async fn load(&self) -> Result<String, DbError> {
-        tracing::debug!("Loading data from file");
-        tokio::fs::read_to_string(&self.file_path)
-            .await
-            .map_err(|e| DbError::FileRead {
-                path: self.file_path.clone(),
-                source: e,
-            })
-    }
-}
-
-pub struct HttpContentSource {
-    url: String,
-}
-
-impl HttpContentSource {
-    pub fn new(url: String) -> Self {
-        Self { url }
-    }
-}
-
-#[async_trait::async_trait]
-impl ContentSource for HttpContentSource {
-    #[tracing::instrument(skip(self), fields(http.url = %self.url))]
-    async fn load(&self) -> Result<String, DbError> {
-        tracing::debug!("Fetching data from URL");
-        let response = reqwest::get(&self.url)
-            .await
-            .map_err(|e| DbError::HttpFetch {
-                url: self.url.clone(),
-                source: e,
-            })?;
-
-        response.text().await.map_err(|e| DbError::HttpFetch {
-            url: self.url.clone(),
-            source: e,
-        })
-    }
-}
-
 pub struct GameContentParser;
 
 impl GameContentParser {
@@ -150,46 +92,62 @@ impl GameContentParser {
     }
 }
 
-pub struct GameContentLoader {
-    data_source: Box<dyn ContentSource + Send + Sync>,
+#[tracing::instrument(skip(config), fields(
+    data.source_type = ?config.source_type,
+    data.file_path = ?config.file_path,
+    data.http_url = ?config.http_url
+))]
+async fn load_content_snapshot_from_config(
+    config: &DatabaseConfig,
+) -> Result<GameContentSnapshot, DbError> {
+    let raw_content = load_raw_content(config).await?;
+    let game_data = GameContentParser::parse_structured_data(&raw_content)?;
+
+    tracing::info!(
+        twitch.channels.count = game_data.twitch_whitelist.len(),
+        words.count = game_data.medandraord_words.len(),
+        trivial_pursuit.cards.count = game_data.trivial_pursuit.cards.len(),
+        vem_vet_mest.questions.count = game_data.vem_vet_mest.len(),
+        "Loaded structured data"
+    );
+
+    Ok(game_data)
 }
 
-impl GameContentLoader {
-    pub fn new(config: &DatabaseConfig) -> Result<Self, DbError> {
-        let data_source = match &config.source_type {
-            ContentSourceType::File => {
-                let file_path = config.file_path.as_ref().ok_or_else(|| {
-                    DbError::Config("File path required for file source".to_string())
-                })?;
-                Box::new(FileContentSource::new(file_path.clone()))
-                    as Box<dyn ContentSource + Send + Sync>
-            }
-            ContentSourceType::Http => {
-                let url = config.http_url.as_ref().ok_or_else(|| {
-                    DbError::Config("HTTP URL required for http source".to_string())
-                })?;
-                Box::new(HttpContentSource::new(url.clone()))
-                    as Box<dyn ContentSource + Send + Sync>
-            }
-        };
+#[tracing::instrument(skip(config))]
+async fn load_raw_content(config: &DatabaseConfig) -> Result<String, DbError> {
+    let source_type = config.source_type.clone();
 
-        Ok(Self { data_source })
-    }
+    match source_type {
+        ContentSourceType::File => {
+            let file_path = config
+                .file_path
+                .as_ref()
+                .ok_or_else(|| DbError::Config("File path required for file source".to_string()))?;
+            tracing::debug!(file.path = %file_path, "Loading data from file");
+            tokio::fs::read_to_string(file_path)
+                .await
+                .map_err(|e| DbError::FileRead {
+                    path: file_path.clone(),
+                    source: e,
+                })
+        }
+        ContentSourceType::Http => {
+            let url = config
+                .http_url
+                .as_ref()
+                .ok_or_else(|| DbError::Config("HTTP URL required for http source".to_string()))?;
+            tracing::debug!(http.url = %url, "Fetching data from URL");
+            let response = reqwest::get(url).await.map_err(|e| DbError::HttpFetch {
+                url: url.clone(),
+                source: e,
+            })?;
 
-    #[tracing::instrument(skip(self))]
-    pub async fn load_all_content(&self) -> Result<GameContentSnapshot, DbError> {
-        let content = self.data_source.load().await?;
-        let game_data = GameContentParser::parse_structured_data(&content)?;
-
-        tracing::info!(
-            twitch.channels.count = game_data.twitch_whitelist.len(),
-            words.count = game_data.medandraord_words.len(),
-            trivial_pursuit.cards.count = game_data.trivial_pursuit.cards.len(),
-            vem_vet_mest.questions.count = game_data.vem_vet_mest.len(),
-            "Loaded structured data"
-        );
-
-        Ok(game_data)
+            response.text().await.map_err(|e| DbError::HttpFetch {
+                url: url.clone(),
+                source: e,
+            })
+        }
     }
 }
 
@@ -198,7 +156,7 @@ pub struct GameContentCache {
     twitch_whitelist: RwLock<Arc<Vec<String>>>,
     trivial_pursuit_data: RwLock<Option<Arc<TrivialPursuitData>>>,
     vem_vet_mest_questions: RwLock<Arc<Vec<VemVetMestQuestion>>>,
-    content_loader: GameContentLoader,
+    content_config: DatabaseConfig,
 }
 
 impl GameContentCache {
@@ -208,11 +166,12 @@ impl GameContentCache {
         data.http_url = ?config.http_url
     ))]
     pub async fn new(config: DatabaseConfig) -> AppResult<Self> {
-        let content_loader = GameContentLoader::new(&config)?;
-        let initial_data = content_loader.load_all_content().await.map_err(|err| {
-            tracing::error!(error = %err, "Failed to load required data file");
-            err
-        })?;
+        let initial_data = load_content_snapshot_from_config(&config)
+            .await
+            .map_err(|err| {
+                tracing::error!(error = %err, "Failed to load required data file");
+                err
+            })?;
 
         tracing::info!(
             twitch.channels.count = initial_data.twitch_whitelist.len(),
@@ -227,14 +186,14 @@ impl GameContentCache {
             twitch_whitelist: RwLock::new(Arc::new(initial_data.twitch_whitelist)),
             trivial_pursuit_data: RwLock::new(Some(Arc::new(initial_data.trivial_pursuit))),
             vem_vet_mest_questions: RwLock::new(Arc::new(initial_data.vem_vet_mest)),
-            content_loader,
+            content_config: config,
         })
     }
 
     #[tracing::instrument(skip(self))]
     pub async fn refresh_all_content(&self) -> AppResult<()> {
         tracing::info!("Refreshing cached game content");
-        let new_data = self.content_loader.load_all_content().await?;
+        let new_data = load_content_snapshot_from_config(&self.content_config).await?;
 
         {
             let mut words_guard = self.medandraord_words.write().await;
