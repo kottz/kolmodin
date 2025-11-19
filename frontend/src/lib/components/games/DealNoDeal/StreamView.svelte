@@ -42,7 +42,7 @@
 </script>
 
 <div
-	class="stream-view-container relative h-screen overflow-hidden bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900"
+	class="stream-view-container relative h-screen overflow-hidden bg-linear-to-br from-slate-900 via-blue-900 to-indigo-900"
 >
 	<!-- Animated Background Elements -->
 	<div class="absolute inset-0 opacity-20">
@@ -276,7 +276,7 @@
 													: 'border-white/30 bg-white/10 text-white hover:bg-white/20'}"
 										>
 											<div>
-												<div class="flex-shrink-0">
+												<div class="shrink-0">
 													<span class="font-bold">#{caseIndex + 1}</span>
 													{#if isPlayerCase && !isOpened}
 														<span class="block text-[0.6rem] text-yellow-300 sm:text-xs"

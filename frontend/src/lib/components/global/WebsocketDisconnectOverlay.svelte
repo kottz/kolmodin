@@ -70,7 +70,7 @@
 
 {#if showOverlay}
 	<div
-		class="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+		class="fixed inset-0 z-90 flex items-center justify-center bg-black/70 backdrop-blur-sm"
 		transition:fade={{ duration: 200 }}
 		aria-modal="true"
 		role="dialog"

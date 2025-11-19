@@ -50,7 +50,7 @@
 						: `Case #${caseIndex + 1}`}
 			>
 				<div>
-					<div class="flex-shrink-0">
+					<div class="shrink-0">
 						<span class="font-bold {isPlayerCase && !isOpened ? '' : 'text-base sm:text-lg'}">
 							#{caseIndex + 1}
 						</span>

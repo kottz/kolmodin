@@ -55,7 +55,7 @@
 </svelte:head>
 
 <div
-	class="stream-container min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900"
+	class="stream-container min-h-screen bg-linear-to-br from-slate-900 via-purple-900 to-slate-900"
 >
 	{#if !state.isVisible}
 		<!-- Hidden state -->
@@ -75,7 +75,7 @@
 				<p class="text-xl text-white/80">Waiting for game to start...</p>
 				<div class="mt-8">
 					<div class="mx-auto h-2 w-48 overflow-hidden rounded-full bg-white/20">
-						<div class="h-full animate-pulse bg-gradient-to-r from-blue-500 to-purple-500"></div>
+						<div class="h-full animate-pulse bg-linear-to-r from-blue-500 to-purple-500"></div>
 					</div>
 				</div>
 			</div>

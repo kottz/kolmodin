@@ -41,7 +41,7 @@
 
 {#if notifications.length > 0}
 	<div
-		class="fixed right-4 bottom-4 z-[100] flex flex-col items-end space-y-2 sm:top-4 sm:right-4 sm:bottom-auto md:top-6 md:right-6"
+		class="fixed right-4 bottom-4 z-100 flex flex-col items-end space-y-2 sm:top-4 sm:right-4 sm:bottom-auto md:top-6 md:right-6"
 		aria-live="assertive"
 	>
 		{#each notifications as notification (notification.id)}
@@ -60,7 +60,7 @@
 						<!-- <svelte:component this={getIcon(notification.type)} class="h-5 w-5 {getIconColorClass(notification.type)} mr-2 mt-0.5" /> -->
 						<p class="text-sm font-medium">{notification.message}</p>
 					</div>
-					<div class="ml-2 flex-shrink-0">
+					<div class="ml-2 shrink-0">
 						<Button
 							variant="ghost"
 							size="icon"

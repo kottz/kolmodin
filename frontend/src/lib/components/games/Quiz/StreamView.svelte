@@ -305,7 +305,7 @@
 
 <div class="stream-view-container relative h-screen overflow-hidden bg-slate-950">
 	<!-- Subtle background gradient -->
-	<div class="absolute inset-0 bg-gradient-to-br from-slate-900 to-slate-950 opacity-80"></div>
+	<div class="absolute inset-0 bg-linear-to-br from-slate-900 to-slate-950 opacity-80"></div>
 
 	<!-- Main Content -->
 	<div class="relative z-10 flex h-full flex-col">
@@ -350,7 +350,7 @@
 
 						<!-- Center: Main content -->
 						<div class="flex-1 text-center">
-							<div class="flex min-h-[14rem] flex-col justify-center space-y-2">
+							<div class="flex min-h-56 flex-col justify-center space-y-2">
 								{#if instructionState.type === 'correct-answer'}
 									<div class="text-6xl leading-tight font-bold text-white">
 										{instructionState.text}
@@ -452,11 +452,11 @@
 									<div
 										class="flex items-center justify-between rounded-xl p-6 transition-all duration-500 {rank ===
 										1
-											? 'border-2 border-yellow-500/50 bg-gradient-to-r from-yellow-500/40 to-yellow-600/40'
+											? 'border-2 border-yellow-500/50 bg-linear-to-r from-yellow-500/40 to-yellow-600/40'
 											: rank === 2
-												? 'border border-gray-400/40 bg-gradient-to-r from-gray-400/30 to-gray-500/30'
+												? 'border border-gray-400/40 bg-linear-to-r from-gray-400/30 to-gray-500/30'
 												: rank === 3
-													? 'border border-amber-600/40 bg-gradient-to-r from-amber-600/30 to-amber-700/30'
+													? 'border border-amber-600/40 bg-linear-to-r from-amber-600/30 to-amber-700/30'
 													: 'border border-white/20 bg-white/10'}"
 										transition:fly={{
 											x: -100,
