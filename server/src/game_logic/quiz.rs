@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::Sender as TokioMpscSender;
 use uuid::Uuid;
 
-use crate::db::{TrivialPursuitData, VemVetMestQuestion};
+use crate::content::{TrivialPursuitData, VemVetMestQuestion};
 use crate::game_logic::messages::{
     ClientToServerMessage as GenericClientToServerMessage,
     ServerToClientMessage as GenericServerToClientMessage,
@@ -31,7 +31,7 @@ pub struct RecentGuess {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "command")]
-pub enum AdminCommand {
+pub enum QuizAdminCommand {
     StartGame,
     PassQuestion,
     ResetGame,
@@ -44,7 +44,7 @@ pub enum AdminCommand {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "event_type", content = "data")]
-pub enum GameEvent {
+pub enum QuizEvent {
     QuestionChanged {
         question: String,
         is_placeholder: bool,
@@ -53,8 +53,8 @@ pub enum GameEvent {
         player: String,
         points: u32,
     },
-    GamePhaseChanged {
-        new_phase: GamePhase,
+    QuizPhaseChanged {
+        new_phase: QuizPhase,
     },
     GameTimeUpdate {
         remaining_seconds: u64,
@@ -66,7 +66,7 @@ pub enum GameEvent {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", content = "data")]
-pub enum GamePhase {
+pub enum QuizPhase {
     Setup,
     Playing {
         current_question: String,
@@ -79,11 +79,11 @@ pub enum GamePhase {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct QuizGameState {
+pub struct QuizGame {
     #[serde(skip)]
     clients: HashMap<Uuid, TokioMpscSender<ws::Message>>,
 
-    pub phase: GamePhase,
+    pub phase: QuizPhase,
     pub target_points: u32,
     pub game_duration_seconds: u64,
     pub point_limit_enabled: bool,
@@ -103,7 +103,7 @@ pub struct QuizGameState {
     game_start_time: Option<Instant>,
 }
 
-impl Clone for QuizGameState {
+impl Clone for QuizGame {
     fn clone(&self) -> Self {
         Self {
             clients: HashMap::new(),
@@ -123,14 +123,14 @@ impl Clone for QuizGameState {
     }
 }
 
-impl QuizGameState {
+impl QuizGame {
     pub fn new(
         trivial_pursuit_data: Option<Arc<TrivialPursuitData>>,
         vem_vet_mest_data: Option<Arc<Vec<VemVetMestQuestion>>>,
     ) -> Self {
         Self {
             clients: HashMap::new(),
-            phase: GamePhase::Setup,
+            phase: QuizPhase::Setup,
             target_points: 10,
             game_duration_seconds: 300,
             point_limit_enabled: true,
@@ -145,7 +145,7 @@ impl QuizGameState {
         }
     }
 
-    async fn broadcast_game_event_to_all(&self, event_payload: GameEvent) {
+    async fn broadcast_game_event_to_all(&self, event_payload: QuizEvent) {
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_QUIZ.to_string(),
             &event_payload,
@@ -156,7 +156,7 @@ impl QuizGameState {
             Err(e) => {
                 tracing::error!(
                     error = %e,
-                    "Failed to serialize GameEvent for broadcast"
+                    "Failed to serialize QuizEvent for broadcast"
                 );
             }
         }
@@ -183,7 +183,7 @@ impl QuizGameState {
         }
     }
 
-    async fn send_full_state_to_client(&self, client_id: &Uuid, state: &QuizGameState) {
+    async fn send_full_state_to_client(&self, client_id: &Uuid, state: &QuizGame) {
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_QUIZ.to_string(),
             &serde_json::json!({
@@ -259,10 +259,10 @@ impl QuizGameState {
             .map(|(player, _)| player.clone())
             .unwrap_or_else(|| "No players".to_string());
 
-        self.phase = GamePhase::GameOver { winner };
+        self.phase = QuizPhase::GameOver { winner };
         self.game_start_time = None;
 
-        self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+        self.broadcast_game_event_to_all(QuizEvent::QuizPhaseChanged {
             new_phase: self.phase.clone(),
         })
         .await;
@@ -271,7 +271,7 @@ impl QuizGameState {
     }
 
     async fn handle_start_game(&mut self) {
-        if self.phase != GamePhase::Setup {
+        if self.phase != QuizPhase::Setup {
             return;
         }
 
@@ -280,32 +280,32 @@ impl QuizGameState {
         self.game_start_time = Some(Instant::now());
 
         if let Some((question, answer, extra_info)) = self.get_next_question() {
-            self.phase = GamePhase::Playing {
+            self.phase = QuizPhase::Playing {
                 current_question: question.clone(),
                 current_answer: answer,
                 extra_info,
             };
-            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuestionChanged {
                 question,
                 is_placeholder: false,
             })
             .await;
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuizPhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
         } else {
-            self.phase = GamePhase::Playing {
+            self.phase = QuizPhase::Playing {
                 current_question: "No questions!".to_string(),
                 current_answer: "".to_string(),
                 extra_info: None,
             };
-            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuestionChanged {
                 question: "No questions!".to_string(),
                 is_placeholder: true,
             })
             .await;
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuizPhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
@@ -314,30 +314,30 @@ impl QuizGameState {
     }
 
     async fn handle_pass_question(&mut self) {
-        if let GamePhase::Playing { .. } = &self.phase {
+        if let QuizPhase::Playing { .. } = &self.phase {
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 return;
             }
 
             if let Some((question, answer, extra_info)) = self.get_next_question() {
-                self.phase = GamePhase::Playing {
+                self.phase = QuizPhase::Playing {
                     current_question: question.clone(),
                     current_answer: answer,
                     extra_info,
                 };
-                self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                self.broadcast_game_event_to_all(QuizEvent::QuestionChanged {
                     question,
                     is_placeholder: false,
                 })
                 .await;
             } else {
-                self.phase = GamePhase::Playing {
+                self.phase = QuizPhase::Playing {
                     current_question: "Out of questions!".to_string(),
                     current_answer: "".to_string(),
                     extra_info: None,
                 };
-                self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+                self.broadcast_game_event_to_all(QuizEvent::QuestionChanged {
                     question: "Out of questions!".to_string(),
                     is_placeholder: true,
                 })
@@ -348,39 +348,39 @@ impl QuizGameState {
     }
 
     async fn handle_reset_game(&mut self) {
-        self.phase = GamePhase::Setup;
+        self.phase = QuizPhase::Setup;
         self.player_scores.clear();
         self.local_used_question_ids.clear();
         self.local_used_vem_vet_mest_indices.clear();
         self.recent_guesses.clear();
         self.game_start_time = None;
 
-        self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+        self.broadcast_game_event_to_all(QuizEvent::QuizPhaseChanged {
             new_phase: self.phase.clone(),
         })
         .await;
     }
 
     fn handle_set_target_points(&mut self, points: u32) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == QuizPhase::Setup {
             self.target_points = points;
         }
     }
 
     fn handle_set_game_duration(&mut self, seconds: u32) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == QuizPhase::Setup {
             self.game_duration_seconds = seconds as u64;
         }
     }
 
     fn handle_set_point_limit_enabled(&mut self, enabled: bool) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == QuizPhase::Setup {
             self.point_limit_enabled = enabled;
         }
     }
 
     fn handle_set_time_limit_enabled(&mut self, enabled: bool) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == QuizPhase::Setup {
             self.time_limit_enabled = enabled;
         }
     }
@@ -437,7 +437,7 @@ impl QuizGameState {
                 }
             }
 
-            self.broadcast_game_event_to_all(GameEvent::RecentGuessesUpdated {
+            self.broadcast_game_event_to_all(QuizEvent::RecentGuessesUpdated {
                 recent_guesses: self.recent_guesses.clone(),
             })
             .await;
@@ -592,23 +592,23 @@ impl QuizGameState {
         // Mark question as used - find it in both sources by matching answer and question
         self.mark_question_as_used(question, correct_answer);
 
-        self.broadcast_game_event_to_all(GameEvent::PlayerScored {
+        self.broadcast_game_event_to_all(QuizEvent::PlayerScored {
             player: player.to_string(),
             points: new_score,
         })
         .await;
 
-        self.broadcast_game_event_to_all(GameEvent::RecentGuessesUpdated {
+        self.broadcast_game_event_to_all(QuizEvent::RecentGuessesUpdated {
             recent_guesses: self.recent_guesses.clone(),
         })
         .await;
 
         if self.point_limit_enabled && new_score >= self.target_points {
             self.game_start_time = None;
-            self.phase = GamePhase::GameOver {
+            self.phase = QuizPhase::GameOver {
                 winner: player.to_string(),
             };
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuizPhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
@@ -616,23 +616,23 @@ impl QuizGameState {
         }
 
         if let Some((question, answer, extra_info)) = self.get_next_question() {
-            self.phase = GamePhase::Playing {
+            self.phase = QuizPhase::Playing {
                 current_question: question.clone(),
                 current_answer: answer,
                 extra_info,
             };
-            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuestionChanged {
                 question,
                 is_placeholder: false,
             })
             .await;
         } else {
-            self.phase = GamePhase::Playing {
+            self.phase = QuizPhase::Playing {
                 current_question: "Out of questions!".to_string(),
                 current_answer: "".to_string(),
                 extra_info: None,
             };
-            self.broadcast_game_event_to_all(GameEvent::QuestionChanged {
+            self.broadcast_game_event_to_all(QuizEvent::QuestionChanged {
                 question: "Out of questions!".to_string(),
                 is_placeholder: true,
             })
@@ -642,7 +642,7 @@ impl QuizGameState {
     }
 }
 
-impl GameLogic for QuizGameState {
+impl GameLogic for QuizGame {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         tracing::debug!(
             client.id = %client_id,
@@ -678,25 +678,25 @@ impl GameLogic for QuizGameState {
                     return EventHandlingResult::Handled;
                 }
 
-                match serde_json::from_value::<AdminCommand>(command_data) {
+                match serde_json::from_value::<QuizAdminCommand>(command_data) {
                     Ok(cmd) => {
                         match cmd {
-                            AdminCommand::StartGame => self.handle_start_game().await,
-                            AdminCommand::PassQuestion => self.handle_pass_question().await,
-                            AdminCommand::ResetGame => self.handle_reset_game().await,
-                            AdminCommand::SetTargetPoints { points } => {
+                            QuizAdminCommand::StartGame => self.handle_start_game().await,
+                            QuizAdminCommand::PassQuestion => self.handle_pass_question().await,
+                            QuizAdminCommand::ResetGame => self.handle_reset_game().await,
+                            QuizAdminCommand::SetTargetPoints { points } => {
                                 self.handle_set_target_points(points)
                             }
-                            AdminCommand::SetGameDuration { seconds } => {
+                            QuizAdminCommand::SetGameDuration { seconds } => {
                                 self.handle_set_game_duration(seconds)
                             }
-                            AdminCommand::SetPointLimitEnabled { enabled } => {
+                            QuizAdminCommand::SetPointLimitEnabled { enabled } => {
                                 self.handle_set_point_limit_enabled(enabled)
                             }
-                            AdminCommand::SetTimeLimitEnabled { enabled } => {
+                            QuizAdminCommand::SetTimeLimitEnabled { enabled } => {
                                 self.handle_set_time_limit_enabled(enabled)
                             }
-                            AdminCommand::RemoveRecentGuess { guess_id } => {
+                            QuizAdminCommand::RemoveRecentGuess { guess_id } => {
                                 self.handle_remove_recent_guess(&guess_id).await
                             }
                         }
@@ -728,7 +728,7 @@ impl GameLogic for QuizGameState {
     }
 
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {
-        if let GamePhase::Playing {
+        if let QuizPhase::Playing {
             current_question: _,
             current_answer,
             extra_info: _,
@@ -751,7 +751,7 @@ impl GameLogic for QuizGameState {
                     "Correct guess"
                 );
 
-                if let GamePhase::Playing {
+                if let QuizPhase::Playing {
                     current_question, ..
                 } = &self.phase
                 {
@@ -784,7 +784,7 @@ impl GameLogic for QuizGameState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{TrivialPursuitCard, TrivialPursuitQuestion};
+    use crate::content::{TrivialPursuitCard, TrivialPursuitQuestion};
 
     #[test]
     fn test_quiz_with_both_sources() {
@@ -813,7 +813,7 @@ mod tests {
         let vvm_data = Arc::new(vec![vvm_question]);
 
         // Create quiz state with both sources
-        let mut quiz_state = QuizGameState::new(Some(tp_data), Some(vvm_data));
+        let mut quiz_state = QuizGame::new(Some(tp_data), Some(vvm_data));
 
         // Get first question - should randomly pick from either source
         let first_question = quiz_state.get_next_question();
@@ -865,7 +865,7 @@ mod tests {
         });
 
         // Create quiz state with only TP data
-        let mut quiz_state = QuizGameState::new(Some(tp_data), None);
+        let mut quiz_state = QuizGame::new(Some(tp_data), None);
 
         // Should get the TP question
         let question_result = quiz_state.get_next_question();
@@ -888,7 +888,7 @@ mod tests {
         let vvm_data = Arc::new(vec![vvm_question]);
 
         // Create quiz state with only VVM data
-        let mut quiz_state = QuizGameState::new(None, Some(vvm_data));
+        let mut quiz_state = QuizGame::new(None, Some(vvm_data));
 
         // Should get the VVM question
         let question_result = quiz_state.get_next_question();
@@ -941,7 +941,7 @@ mod tests {
             cards: vec![card1, card2],
         });
 
-        let mut quiz_state = QuizGameState::new(Some(tp_data), None);
+        let mut quiz_state = QuizGame::new(Some(tp_data), None);
 
         // Get 4 questions and verify they are all unique
         let mut questions_seen = std::collections::HashSet::new();

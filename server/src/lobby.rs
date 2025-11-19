@@ -8,10 +8,10 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::config::{AppSettings, GamesConfig};
-use crate::db::WordListManager;
+use crate::content::GameContentCache;
 use crate::game_logic::{
-    ClipQueueGame, DealNoDealGame, GameLogic, MedAndraOrdGameState, QuizGameState,
-    ServerToClientMessage, messages as game_messages,
+    ClipQueueGame, DealNoDealGame, GameLogic, MedAndraOrdGame, QuizGame, ServerToClientMessage,
+    messages as game_messages,
 };
 use crate::twitch::{
     ParsedTwitchMessage, TwitchChannelConnectionStatus, TwitchChatManagerActorHandle,
@@ -47,7 +47,7 @@ pub struct LobbyManagerActor {
     self_sender: mpsc::Sender<LobbyManagerMessage>,
     twitch_chat_manager_handle: TwitchChatManagerActorHandle,
     games_config: GamesConfig,
-    word_list_manager: Arc<WordListManager>,
+    content_cache: Arc<GameContentCache>,
     app_settings: Arc<AppSettings>,
 }
 
@@ -57,7 +57,7 @@ impl LobbyManagerActor {
         self_sender: mpsc::Sender<LobbyManagerMessage>,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
-        word_list_manager: Arc<WordListManager>,
+        content_cache: Arc<GameContentCache>,
         app_settings: Arc<AppSettings>,
     ) -> Self {
         LobbyManagerActor {
@@ -66,7 +66,7 @@ impl LobbyManagerActor {
             self_sender,
             twitch_chat_manager_handle,
             games_config,
-            word_list_manager,
+            content_cache,
             app_settings,
         }
     }
@@ -97,7 +97,7 @@ impl LobbyManagerActor {
                 // Validate Twitch channel if requested
                 if let Some(ref channel_name) = requested_twitch_channel {
                     if !self
-                        .word_list_manager
+                        .content_cache
                         .is_twitch_channel_allowed(channel_name)
                         .await
                     {
@@ -121,13 +121,13 @@ impl LobbyManagerActor {
                 let actual_game_type_created: String;
 
                 // Get current word list for MedAndraOrd
-                let mao_words = self.word_list_manager.get_med_andra_ord_words().await;
+                let medandraord_words = self.content_cache.medandraord_words().await;
 
                 // Get Trivial Pursuit data for Quiz
-                let trivial_pursuit_data = self.word_list_manager.get_trivial_pursuit_data().await;
+                let trivial_pursuit_data = self.content_cache.trivial_pursuit_data().await;
 
                 // Get Vem Vet Mest data for Quiz
-                let vem_vet_mest_data = self.word_list_manager.get_vem_vet_mest_questions().await;
+                let vem_vet_mest_data = self.content_cache.vem_vet_mest_questions().await;
 
                 match game_type_str_req.to_lowercase().as_str() {
                     "dealnodeal" | "dealornodeal" => {
@@ -143,7 +143,7 @@ impl LobbyManagerActor {
                         }
                         let game_engine = DealNoDealGame::new();
                         actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::new_spawned::<DealNoDealGame>(
+                        lobby_actor_handle = LobbyActorHandle::spawn::<DealNoDealGame>(
                             lobby_id,
                             32,
                             manager_handle,
@@ -163,9 +163,9 @@ impl LobbyManagerActor {
                                 .send(Err("Game type 'medandraord' is not enabled.".to_string()));
                             return;
                         }
-                        let game_engine = MedAndraOrdGameState::new(mao_words);
+                        let game_engine = MedAndraOrdGame::new(medandraord_words.clone());
                         actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
+                        lobby_actor_handle = LobbyActorHandle::spawn::<MedAndraOrdGame>(
                             lobby_id,
                             32,
                             manager_handle.clone(),
@@ -201,7 +201,7 @@ impl LobbyManagerActor {
 
                         let game_engine = ClipQueueGame::new(self.app_settings.clone());
                         actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::new_spawned::<ClipQueueGame>(
+                        lobby_actor_handle = LobbyActorHandle::spawn::<ClipQueueGame>(
                             lobby_id,
                             32,
                             manager_handle.clone(),
@@ -222,9 +222,9 @@ impl LobbyManagerActor {
                             return;
                         }
                         let game_engine =
-                            QuizGameState::new(trivial_pursuit_data, Some(vem_vet_mest_data));
+                            QuizGame::new(trivial_pursuit_data, Some(vem_vet_mest_data));
                         actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::new_spawned::<QuizGameState>(
+                        lobby_actor_handle = LobbyActorHandle::spawn::<QuizGame>(
                             lobby_id,
                             32,
                             manager_handle.clone(),
@@ -252,9 +252,9 @@ impl LobbyManagerActor {
                             )));
                             return;
                         }
-                        let game_engine = MedAndraOrdGameState::new(mao_words);
+                        let game_engine = MedAndraOrdGame::new(medandraord_words.clone());
                         actual_game_type_created = game_engine.game_type_id();
-                        lobby_actor_handle = LobbyActorHandle::new_spawned::<MedAndraOrdGameState>(
+                        lobby_actor_handle = LobbyActorHandle::spawn::<MedAndraOrdGame>(
                             lobby_id,
                             32,
                             manager_handle.clone(),
@@ -325,11 +325,11 @@ pub struct LobbyManagerHandle {
 }
 
 impl LobbyManagerHandle {
-    pub fn new(
+    pub fn spawn(
         buffer_size: usize,
         twitch_chat_manager_handle: TwitchChatManagerActorHandle,
         games_config: GamesConfig,
-        word_list_manager: Arc<WordListManager>,
+        content_cache: Arc<GameContentCache>,
         app_settings: Arc<AppSettings>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
@@ -338,7 +338,7 @@ impl LobbyManagerHandle {
             sender.clone(),
             twitch_chat_manager_handle,
             games_config,
-            word_list_manager,
+            content_cache,
             app_settings,
         );
         let handle = Self {
@@ -392,9 +392,9 @@ impl LobbyManagerHandle {
 
 #[derive(Debug)]
 pub enum LobbyActorMessage {
-    ProcessEvent {
+    ClientEvent {
         client_id: Uuid,
-        event_data: String,
+        raw_payload: String,
     },
     ClientConnected {
         client_id: Uuid,
@@ -455,17 +455,17 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
         self_sender: &mpsc::Sender<LobbyActorMessage>,
     ) -> bool {
         match msg {
-            LobbyActorMessage::ProcessEvent {
+            LobbyActorMessage::ClientEvent {
                 client_id,
-                event_data,
+                raw_payload,
             } => {
                 tracing::trace!(
                     client.id = %client_id,
-                    event.raw = %event_data,
+                    event.raw = %raw_payload,
                     "Raw event from client"
                 );
 
-                match game_messages::client_message_from_ws_text(&event_data) {
+                match game_messages::parse_client_ws_message(&raw_payload) {
                     Ok(parsed_message) => {
                         tracing::debug!(
                             client.id = %client_id,
@@ -514,7 +514,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                         tracing::warn!(
                             client.id = %client_id,
                             error = %e,
-                            event.raw = %event_data,
+                            event.raw = %raw_payload,
                             "Failed to deserialize event from client"
                         );
                         if let Some(client_tx) = self.game_engine.get_client_tx(client_id) {
@@ -845,7 +845,7 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
             maybe_msg = actor.receiver.recv() => {
                 match maybe_msg {
                     Some(msg) => {
-                        if matches!(msg, LobbyActorMessage::ProcessEvent { .. }) {
+                        if matches!(msg, LobbyActorMessage::ClientEvent { .. }) {
                             last_client_ws_activity = Instant::now();
                             tracing::trace!("Client WS activity detected. Resetting inactivity timer");
                         }
@@ -918,7 +918,7 @@ pub struct LobbyActorHandle {
 }
 
 impl LobbyActorHandle {
-    pub fn new_spawned<G: GameLogic + Send + 'static>(
+    pub fn spawn<G: GameLogic + Send + 'static>(
         lobby_id: Uuid,
         buffer_size: usize,
         lobby_manager_handle: LobbyManagerHandle,
@@ -939,11 +939,15 @@ impl LobbyActorHandle {
         Self { sender, lobby_id }
     }
 
-    pub async fn process_event(&self, client_id: Uuid, event_data: String) -> Result<(), String> {
+    pub async fn forward_client_event(
+        &self,
+        client_id: Uuid,
+        raw_payload: String,
+    ) -> Result<(), String> {
         self.sender
-            .send(LobbyActorMessage::ProcessEvent {
+            .send(LobbyActorMessage::ClientEvent {
                 client_id,
-                event_data,
+                raw_payload,
             })
             .await
             .map_err(|e| format!("Failed to send event: {}", e))

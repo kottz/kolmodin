@@ -29,7 +29,7 @@ pub struct RecentGuess {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "command")]
-pub enum AdminCommand {
+pub enum MedAndraOrdAdminCommand {
     StartGame,
     PassWord,
     ResetGame,
@@ -42,28 +42,28 @@ pub enum AdminCommand {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "event_type", content = "data")]
-pub enum GameEvent {
+pub enum MedAndraOrdEvent {
     WordChanged { word: String, is_placeholder: bool },
     PlayerScored { player: String, points: u32 },
-    GamePhaseChanged { new_phase: GamePhase },
+    MedAndraOrdPhaseChanged { new_phase: MedAndraOrdPhase },
     GameTimeUpdate { remaining_seconds: u64 },
     RecentGuessesUpdated { recent_guesses: Vec<RecentGuess> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", content = "data")]
-pub enum GamePhase {
+pub enum MedAndraOrdPhase {
     Setup,
     Playing { current_word: String },
     GameOver { winner: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct MedAndraOrdGameState {
+pub struct MedAndraOrdGame {
     #[serde(skip)]
     clients: HashMap<Uuid, TokioMpscSender<ws::Message>>,
 
-    pub phase: GamePhase,
+    pub phase: MedAndraOrdPhase,
     pub target_points: u32,
     pub game_duration_seconds: u64,
     pub point_limit_enabled: bool,
@@ -79,7 +79,7 @@ pub struct MedAndraOrdGameState {
     game_start_time: Option<Instant>,
 }
 
-impl Clone for MedAndraOrdGameState {
+impl Clone for MedAndraOrdGame {
     fn clone(&self) -> Self {
         Self {
             clients: HashMap::new(),
@@ -97,11 +97,11 @@ impl Clone for MedAndraOrdGameState {
     }
 }
 
-impl MedAndraOrdGameState {
+impl MedAndraOrdGame {
     pub fn new(word_list_snapshot: Arc<Vec<String>>) -> Self {
         Self {
             clients: HashMap::new(),
-            phase: GamePhase::Setup,
+            phase: MedAndraOrdPhase::Setup,
             target_points: 10,
             game_duration_seconds: 300,
             point_limit_enabled: true,
@@ -114,7 +114,7 @@ impl MedAndraOrdGameState {
         }
     }
 
-    async fn broadcast_game_event_to_all(&self, event_payload: GameEvent) {
+    async fn broadcast_game_event_to_all(&self, event_payload: MedAndraOrdEvent) {
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_MED_ANDRA_ORD.to_string(),
             &event_payload,
@@ -125,7 +125,7 @@ impl MedAndraOrdGameState {
             Err(e) => {
                 tracing::error!(
                     error = %e,
-                    "Failed to serialize GameEvent for broadcast"
+                    "Failed to serialize MedAndraOrdEvent for broadcast"
                 );
             }
         }
@@ -152,7 +152,7 @@ impl MedAndraOrdGameState {
         }
     }
 
-    async fn send_full_state_to_client(&self, client_id: &Uuid, state: &MedAndraOrdGameState) {
+    async fn send_full_state_to_client(&self, client_id: &Uuid, state: &MedAndraOrdGame) {
         match GenericServerToClientMessage::new_game_specific_event(
             GAME_TYPE_ID_MED_ANDRA_ORD.to_string(),
             &serde_json::json!({
@@ -228,10 +228,10 @@ impl MedAndraOrdGameState {
             .map(|(player, _)| player.clone())
             .unwrap_or_else(|| "No players".to_string());
 
-        self.phase = GamePhase::GameOver { winner };
+        self.phase = MedAndraOrdPhase::GameOver { winner };
         self.game_start_time = None;
 
-        self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+        self.broadcast_game_event_to_all(MedAndraOrdEvent::MedAndraOrdPhaseChanged {
             new_phase: self.phase.clone(),
         })
         .await;
@@ -240,7 +240,7 @@ impl MedAndraOrdGameState {
     }
 
     async fn handle_start_game(&mut self) {
-        if self.phase != GamePhase::Setup {
+        if self.phase != MedAndraOrdPhase::Setup {
             return;
         }
 
@@ -249,28 +249,28 @@ impl MedAndraOrdGameState {
         self.game_start_time = Some(Instant::now());
 
         if let Some(word) = self.get_next_word() {
-            self.phase = GamePhase::Playing {
+            self.phase = MedAndraOrdPhase::Playing {
                 current_word: word.clone(),
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::WordChanged {
                 word,
                 is_placeholder: false,
             })
             .await;
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::MedAndraOrdPhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
         } else {
-            self.phase = GamePhase::Playing {
+            self.phase = MedAndraOrdPhase::Playing {
                 current_word: "Inga ord!".to_string(),
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::WordChanged {
                 word: "Inga ord!".to_string(),
                 is_placeholder: true,
             })
             .await;
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::MedAndraOrdPhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
@@ -279,26 +279,26 @@ impl MedAndraOrdGameState {
     }
 
     async fn handle_pass_word(&mut self) {
-        if let GamePhase::Playing { .. } = &self.phase {
+        if let MedAndraOrdPhase::Playing { .. } = &self.phase {
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 return;
             }
 
             if let Some(word) = self.get_next_word() {
-                self.phase = GamePhase::Playing {
+                self.phase = MedAndraOrdPhase::Playing {
                     current_word: word.clone(),
                 };
-                self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                self.broadcast_game_event_to_all(MedAndraOrdEvent::WordChanged {
                     word,
                     is_placeholder: false,
                 })
                 .await;
             } else {
-                self.phase = GamePhase::Playing {
+                self.phase = MedAndraOrdPhase::Playing {
                     current_word: "Slut på ord!".to_string(),
                 };
-                self.broadcast_game_event_to_all(GameEvent::WordChanged {
+                self.broadcast_game_event_to_all(MedAndraOrdEvent::WordChanged {
                     word: "Slut på ord!".to_string(),
                     is_placeholder: true,
                 })
@@ -309,38 +309,38 @@ impl MedAndraOrdGameState {
     }
 
     async fn handle_reset_game(&mut self) {
-        self.phase = GamePhase::Setup;
+        self.phase = MedAndraOrdPhase::Setup;
         self.player_scores.clear();
         self.local_used_words.clear();
         self.recent_guesses.clear();
         self.game_start_time = None;
 
-        self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+        self.broadcast_game_event_to_all(MedAndraOrdEvent::MedAndraOrdPhaseChanged {
             new_phase: self.phase.clone(),
         })
         .await;
     }
 
     fn handle_set_target_points(&mut self, points: u32) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == MedAndraOrdPhase::Setup {
             self.target_points = points;
         }
     }
 
     fn handle_set_game_duration(&mut self, seconds: u32) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == MedAndraOrdPhase::Setup {
             self.game_duration_seconds = seconds as u64;
         }
     }
 
     fn handle_set_point_limit_enabled(&mut self, enabled: bool) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == MedAndraOrdPhase::Setup {
             self.point_limit_enabled = enabled;
         }
     }
 
     fn handle_set_time_limit_enabled(&mut self, enabled: bool) {
-        if self.phase == GamePhase::Setup {
+        if self.phase == MedAndraOrdPhase::Setup {
             self.time_limit_enabled = enabled;
         }
     }
@@ -389,7 +389,7 @@ impl MedAndraOrdGameState {
                 }
             }
 
-            self.broadcast_game_event_to_all(GameEvent::RecentGuessesUpdated {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::RecentGuessesUpdated {
                 recent_guesses: self.recent_guesses.clone(),
             })
             .await;
@@ -436,23 +436,23 @@ impl MedAndraOrdGameState {
 
         self.add_recent_guess(player, guessed_text, correct_word);
 
-        self.broadcast_game_event_to_all(GameEvent::PlayerScored {
+        self.broadcast_game_event_to_all(MedAndraOrdEvent::PlayerScored {
             player: player.to_string(),
             points: new_score,
         })
         .await;
 
-        self.broadcast_game_event_to_all(GameEvent::RecentGuessesUpdated {
+        self.broadcast_game_event_to_all(MedAndraOrdEvent::RecentGuessesUpdated {
             recent_guesses: self.recent_guesses.clone(),
         })
         .await;
 
         if self.point_limit_enabled && new_score >= self.target_points {
             self.game_start_time = None;
-            self.phase = GamePhase::GameOver {
+            self.phase = MedAndraOrdPhase::GameOver {
                 winner: player.to_string(),
             };
-            self.broadcast_game_event_to_all(GameEvent::GamePhaseChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::MedAndraOrdPhaseChanged {
                 new_phase: self.phase.clone(),
             })
             .await;
@@ -460,19 +460,19 @@ impl MedAndraOrdGameState {
         }
 
         if let Some(word) = self.get_next_word() {
-            self.phase = GamePhase::Playing {
+            self.phase = MedAndraOrdPhase::Playing {
                 current_word: word.clone(),
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::WordChanged {
                 word,
                 is_placeholder: false,
             })
             .await;
         } else {
-            self.phase = GamePhase::Playing {
+            self.phase = MedAndraOrdPhase::Playing {
                 current_word: "Slut på ord!".to_string(),
             };
-            self.broadcast_game_event_to_all(GameEvent::WordChanged {
+            self.broadcast_game_event_to_all(MedAndraOrdEvent::WordChanged {
                 word: "Slut på ord!".to_string(),
                 is_placeholder: true,
             })
@@ -482,7 +482,7 @@ impl MedAndraOrdGameState {
     }
 }
 
-impl GameLogic for MedAndraOrdGameState {
+impl GameLogic for MedAndraOrdGame {
     async fn client_connected(&mut self, client_id: Uuid, client_tx: TokioMpscSender<ws::Message>) {
         tracing::debug!(
             client.id = %client_id,
@@ -518,25 +518,25 @@ impl GameLogic for MedAndraOrdGameState {
                     return EventHandlingResult::Handled;
                 }
 
-                match serde_json::from_value::<AdminCommand>(command_data) {
+                match serde_json::from_value::<MedAndraOrdAdminCommand>(command_data) {
                     Ok(cmd) => {
                         match cmd {
-                            AdminCommand::StartGame => self.handle_start_game().await,
-                            AdminCommand::PassWord => self.handle_pass_word().await,
-                            AdminCommand::ResetGame => self.handle_reset_game().await,
-                            AdminCommand::SetTargetPoints { points } => {
+                            MedAndraOrdAdminCommand::StartGame => self.handle_start_game().await,
+                            MedAndraOrdAdminCommand::PassWord => self.handle_pass_word().await,
+                            MedAndraOrdAdminCommand::ResetGame => self.handle_reset_game().await,
+                            MedAndraOrdAdminCommand::SetTargetPoints { points } => {
                                 self.handle_set_target_points(points)
                             }
-                            AdminCommand::SetGameDuration { seconds } => {
+                            MedAndraOrdAdminCommand::SetGameDuration { seconds } => {
                                 self.handle_set_game_duration(seconds)
                             }
-                            AdminCommand::SetPointLimitEnabled { enabled } => {
+                            MedAndraOrdAdminCommand::SetPointLimitEnabled { enabled } => {
                                 self.handle_set_point_limit_enabled(enabled)
                             }
-                            AdminCommand::SetTimeLimitEnabled { enabled } => {
+                            MedAndraOrdAdminCommand::SetTimeLimitEnabled { enabled } => {
                                 self.handle_set_time_limit_enabled(enabled)
                             }
-                            AdminCommand::RemoveRecentGuess { guess_id } => {
+                            MedAndraOrdAdminCommand::RemoveRecentGuess { guess_id } => {
                                 self.handle_remove_recent_guess(&guess_id).await
                             }
                         }
@@ -568,7 +568,7 @@ impl GameLogic for MedAndraOrdGameState {
     }
 
     async fn handle_twitch_message(&mut self, message: ParsedTwitchMessage) {
-        if let GamePhase::Playing { current_word } = &self.phase {
+        if let MedAndraOrdPhase::Playing { current_word } = &self.phase {
             if self.check_game_time_expired() {
                 self.end_game_time_expired().await;
                 self.broadcast_full_state_update().await;

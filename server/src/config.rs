@@ -16,7 +16,6 @@ impl std::fmt::Debug for ServerConfig {
         f.debug_struct("ServerConfig")
             .field("port", &self.port)
             .field("cors_origins", &self.cors_origins)
-            .field("admin_api_key", &"***REDACTED***")
             .finish()
     }
 }
@@ -37,7 +36,6 @@ impl std::fmt::Debug for TwitchConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TwitchConfig")
             .field("client_id", &self.client_id)
-            .field("client_secret", &"***REDACTED***")
             .field("irc_server_url", &self.irc_server_url)
             .finish()
     }
@@ -72,14 +70,14 @@ impl Default for GamesConfig {
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum DataSourceType {
+pub enum ContentSourceType {
     File,
     Http,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    pub source_type: DataSourceType,
+    pub source_type: ContentSourceType,
     pub file_path: Option<String>,
     pub http_url: Option<String>,
 }
@@ -91,9 +89,7 @@ pub struct YouTubeConfig {
 
 impl std::fmt::Debug for YouTubeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("YouTubeConfig")
-            .field("api_key", &"***REDACTED***")
-            .finish()
+        f.debug_struct("YouTubeConfig").finish()
     }
 }
 
@@ -169,7 +165,7 @@ pub fn load_settings() -> AppResult<AppSettings> {
     }
 
     match app_settings.database.source_type {
-        DataSourceType::File => {
+        ContentSourceType::File => {
             if app_settings.database.file_path.is_none() {
                 return Err(ConfigError::Missing(
                     "database.file_path (for source_type 'file')".to_string(),
@@ -177,7 +173,7 @@ pub fn load_settings() -> AppResult<AppSettings> {
                 .into());
             }
         }
-        DataSourceType::Http => {
+        ContentSourceType::Http => {
             if app_settings.database.http_url.is_none() {
                 return Err(ConfigError::Missing(
                     "database.http_url (for source_type 'http')".to_string(),

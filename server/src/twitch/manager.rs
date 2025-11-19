@@ -33,7 +33,7 @@ pub struct TwitchChatManagerActorHandle {
 }
 
 impl TwitchChatManagerActorHandle {
-    pub fn new(
+    pub fn spawn(
         token_provider: TokenProvider,
         manager_buffer_size: usize,
         channel_actor_buffer_size: usize,

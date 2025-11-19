@@ -525,7 +525,7 @@ impl GameLogic for ClipQueueGame {
 mod tests {
     use super::*;
     use crate::config::{
-        DataSourceType, DatabaseConfig, GamesConfig, ServerConfig, TwitchConfig, YouTubeConfig,
+        ContentSourceType, DatabaseConfig, GamesConfig, ServerConfig, TwitchConfig, YouTubeConfig,
     };
 
     fn create_test_config() -> Arc<AppSettings> {
@@ -544,7 +544,7 @@ mod tests {
                 enabled_types: std::collections::HashSet::new(),
             },
             database: DatabaseConfig {
-                source_type: DataSourceType::File,
+                source_type: ContentSourceType::File,
                 file_path: Some("/tmp/test.db".to_string()),
                 http_url: None,
             },

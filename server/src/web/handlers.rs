@@ -97,8 +97,8 @@ pub async fn refresh_words_handler(
     }
 
     app_state
-        .word_list_manager
-        .refresh_med_andra_ord_words()
+        .game_content_cache
+        .refresh_all_content()
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to refresh words");
@@ -119,8 +119,8 @@ pub async fn get_allowed_channels_handler(
     tracing::debug!("Processing get allowed channels request");
 
     let channels: Vec<String> = app_state
-        .word_list_manager
-        .get_twitch_whitelist()
+        .game_content_cache
+        .twitch_whitelist()
         .await
         .iter()
         .cloned()

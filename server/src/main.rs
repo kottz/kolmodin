@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
-mod db;
+mod content;
 mod error;
 mod game_logic;
 mod lobby;
@@ -11,7 +11,7 @@ mod twitch;
 mod web;
 
 use crate::config::load_settings;
-use crate::db::WordListManager;
+use crate::content::GameContentCache;
 use crate::error::Result as AppResult;
 use crate::lobby::LobbyManagerHandle;
 use crate::state::AppState;
@@ -45,36 +45,36 @@ async fn main() -> AppResult<()> {
 
     tracing::info!("Initializing core components...");
 
-    let word_list_manager = Arc::new(WordListManager::new(app_settings.database.clone()).await?);
-    let initial_mao_words = word_list_manager.get_med_andra_ord_words().await;
-    let initial_whitelist = word_list_manager.get_twitch_whitelist().await;
+    let game_content_cache = Arc::new(GameContentCache::new(app_settings.database.clone()).await?);
+    let initial_medandraord_words = game_content_cache.medandraord_words().await;
+    let initial_whitelist = game_content_cache.twitch_whitelist().await;
     tracing::info!(
-        words.count = initial_mao_words.len(),
+        words.count = initial_medandraord_words.len(),
         twitch.channels.count = initial_whitelist.len(),
-        "WordListManager initialized"
+        "GameContentCache initialized"
     );
 
     let token_provider = TokenProvider::new(Arc::new(app_settings.twitch.clone())).await?;
     tracing::info!("TokenProvider initialized");
 
     let twitch_chat_manager_handle =
-        TwitchChatManagerActorHandle::new(token_provider.clone(), 32, 32);
+        TwitchChatManagerActorHandle::spawn(token_provider.clone(), 32, 32);
     tracing::info!("TwitchChatManagerActor created");
 
     let server_config_for_state = Arc::new(app_settings.server.clone());
 
-    let lobby_manager_handle = LobbyManagerHandle::new(
+    let lobby_manager_handle = LobbyManagerHandle::spawn(
         32,
         twitch_chat_manager_handle.clone(),
         app_settings.games.clone(),
-        Arc::clone(&word_list_manager),
+        Arc::clone(&game_content_cache),
         Arc::new(app_settings.clone()),
     );
     tracing::info!("LobbyManagerActor created");
 
     let app_state = AppState {
         lobby_manager: lobby_manager_handle,
-        word_list_manager,
+        game_content_cache,
         server_config: server_config_for_state,
     };
 

@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::game_logic::messages::{
-    ClientToServerMessage, ServerToClientMessage, client_message_from_ws_text,
+    ClientToServerMessage, ServerToClientMessage, parse_client_ws_message,
 };
 use crate::lobby::LobbyActorHandle;
 use crate::state::AppState;
@@ -18,10 +18,10 @@ pub async fn ws_handler(
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     tracing::info!("WebSocket: Connection attempt to generic /ws endpoint");
-    ws_upgrade.on_upgrade(move |socket| handle_socket(socket, app_state))
+    ws_upgrade.on_upgrade(move |socket| handle_connection(socket, app_state))
 }
 
-pub async fn handle_socket(socket: WebSocket, app_state: AppState) {
+pub async fn handle_connection(socket: WebSocket, app_state: AppState) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     let lobby_handle: LobbyActorHandle;
@@ -30,7 +30,7 @@ pub async fn handle_socket(socket: WebSocket, app_state: AppState) {
     match ws_receiver.next().await {
         Some(Ok(ws::Message::Text(text_msg))) => {
             tracing::debug!("WS: Received initial message: {}", text_msg);
-            match client_message_from_ws_text(&text_msg) {
+            match parse_client_ws_message(&text_msg) {
                 Ok(ClientToServerMessage::ConnectToLobby {
                     lobby_id: received_lobby_id,
                 }) => {
@@ -171,7 +171,7 @@ pub async fn handle_socket(socket: WebSocket, app_state: AppState) {
                             text_msg
                         );
                         if let Err(e) = lobby_handle_clone_recv
-                            .process_event(client_id_clone_recv, text_msg.to_string())
+                            .forward_client_event(client_id_clone_recv, text_msg.to_string())
                             .await
                         {
                             tracing::error!(

@@ -25,8 +25,8 @@ pub mod quiz;
 
 pub use clip_queue::ClipQueueGame;
 pub use deal_no_deal::DealNoDealGame;
-pub use med_andra_ord::MedAndraOrdGameState;
-pub use quiz::QuizGameState;
+pub use med_andra_ord::MedAndraOrdGame;
+pub use quiz::QuizGame;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GameType {

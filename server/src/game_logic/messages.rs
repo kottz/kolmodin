@@ -83,6 +83,6 @@ impl ServerToClientMessage {
     }
 }
 
-pub fn client_message_from_ws_text(text: &str) -> Result<ClientToServerMessage, serde_json::Error> {
+pub fn parse_client_ws_message(text: &str) -> Result<ClientToServerMessage, serde_json::Error> {
     serde_json::from_str(text)
 }
