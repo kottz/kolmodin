@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum TwitchChannelConnectionStatus {
@@ -23,12 +22,6 @@ pub enum TwitchChannelConnectionStatus {
         reason: String,
     },
     Terminated,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChannelTerminationInfo {
-    pub actor_id: Uuid,
-    pub final_status: TwitchChannelConnectionStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

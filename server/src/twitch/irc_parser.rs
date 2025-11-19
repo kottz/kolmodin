@@ -22,8 +22,6 @@ pub const IRC_ACK: &str = "ACK";
 pub const IRC_NAK: &str = "NAK";
 // Special IRC strings
 pub const IRC_WELCOME_TEXT: &str = ":Welcome";
-pub const HEALTH_CHECK_PING: &str = "PING :health-check";
-
 // Twitch capabilities
 pub const TWITCH_CAPABILITIES: &str =
     "CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands";
@@ -63,6 +61,7 @@ impl<'a> IrcMessage<'a> {
         self.command
     }
 
+    #[allow(dead_code)]
     pub fn prefix(&self) -> Option<&str> {
         self.prefix
     }

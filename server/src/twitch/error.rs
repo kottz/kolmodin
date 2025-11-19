@@ -10,10 +10,6 @@ pub enum TwitchError {
     TwitchAuth(String),
     #[error("Actor communication error: {0}")]
     ActorComm(String),
-    #[error("Channel actor internal error: {0}")]
-    InternalActorError(String),
     #[error("Twitch IRC connection error: {0}")]
     TwitchConnection(String),
 }
-
-pub type Result<T, E = TwitchError> = std::result::Result<T, E>;

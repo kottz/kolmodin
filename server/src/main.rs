@@ -16,7 +16,7 @@ use crate::content::GameContentCache;
 use crate::error::Result as AppResult;
 use crate::state::AppState;
 use crate::twitch::TokenProvider;
-use crate::twitch::TwitchChatManagerActorHandle;
+use crate::twitch::TwitchServiceHandle;
 use crate::web::run_server;
 
 #[tracing::instrument(name = "main")]
@@ -57,9 +57,8 @@ async fn main() -> AppResult<()> {
     let token_provider = TokenProvider::new(Arc::new(app_settings.twitch.clone())).await?;
     tracing::info!("TokenProvider initialized");
 
-    let twitch_chat_manager_handle =
-        TwitchChatManagerActorHandle::spawn(token_provider.clone(), 32, 32);
-    tracing::info!("TwitchChatManagerActor created");
+    let twitch_service_handle = TwitchServiceHandle::spawn(token_provider.clone(), 32, 32);
+    tracing::info!("TwitchService started");
 
     let active_lobbies = Arc::new(DashMap::new());
     let server_config_for_state = Arc::new(app_settings.server.clone());
@@ -72,7 +71,7 @@ async fn main() -> AppResult<()> {
         game_content_cache,
         server_config: server_config_for_state,
         games_config,
-        twitch_chat_manager: twitch_chat_manager_handle,
+        twitch_service: twitch_service_handle,
         app_settings: shared_app_settings,
     };
 

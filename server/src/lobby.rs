@@ -13,9 +13,7 @@ use crate::game_logic::{
     ClipQueueGame, DealNoDealGame, GameLogic, MedAndraOrdGame, QuizGame, ServerToClientMessage,
     messages as game_messages,
 };
-use crate::twitch::{
-    ParsedTwitchMessage, TwitchChannelConnectionStatus, TwitchChatManagerActorHandle,
-};
+use crate::twitch::{ParsedTwitchMessage, TwitchChannelConnectionStatus, TwitchServiceHandle};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct LobbyDetails {
@@ -30,7 +28,7 @@ pub async fn create_lobby(
     active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
     games_config: GamesConfig,
     content_cache: Arc<GameContentCache>,
-    twitch_chat_manager_handle: TwitchChatManagerActorHandle,
+    twitch_service_handle: TwitchServiceHandle,
     app_settings: Arc<AppSettings>,
     requested_game_type: Option<String>,
     requested_twitch_channel: Option<String>,
@@ -85,7 +83,7 @@ pub async fn create_lobby(
                 Arc::clone(&active_lobbies),
                 game_engine,
                 requested_twitch_channel.clone(),
-                twitch_chat_manager_handle.clone(),
+                twitch_service_handle.clone(),
             );
             (game_type_id, handle)
         }
@@ -106,7 +104,7 @@ pub async fn create_lobby(
                 Arc::clone(&active_lobbies),
                 game_engine,
                 requested_twitch_channel.clone(),
-                twitch_chat_manager_handle.clone(),
+                twitch_service_handle.clone(),
             );
             (game_type_id, handle)
         }
@@ -140,7 +138,7 @@ pub async fn create_lobby(
                 Arc::clone(&active_lobbies),
                 game_engine,
                 requested_twitch_channel.clone(),
-                twitch_chat_manager_handle.clone(),
+                twitch_service_handle.clone(),
             );
             (game_type_id, handle)
         }
@@ -161,7 +159,7 @@ pub async fn create_lobby(
                 Arc::clone(&active_lobbies),
                 game_engine,
                 requested_twitch_channel.clone(),
-                twitch_chat_manager_handle.clone(),
+                twitch_service_handle.clone(),
             );
             (game_type_id, handle)
         }
@@ -192,7 +190,7 @@ pub async fn create_lobby(
                 Arc::clone(&active_lobbies),
                 game_engine,
                 requested_twitch_channel.clone(),
-                twitch_chat_manager_handle.clone(),
+                twitch_service_handle.clone(),
             );
             (game_type_id, handle)
         }
@@ -240,7 +238,7 @@ pub struct LobbyActor<G: GameLogic + Send + 'static> {
     active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
     twitch_channel_name: Option<String>,
     twitch_status_receiver: Option<tokio::sync::watch::Receiver<TwitchChannelConnectionStatus>>,
-    twitch_chat_manager_handle: TwitchChatManagerActorHandle,
+    twitch_service_handle: TwitchServiceHandle,
     twitch_subscribed: bool,
     _twitch_message_task_handle: Option<tokio::task::JoinHandle<()>>,
     _twitch_status_task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -253,7 +251,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
         game_engine: G,
         active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
         twitch_channel_name: Option<String>,
-        twitch_chat_manager_handle: TwitchChatManagerActorHandle,
+        twitch_service_handle: TwitchServiceHandle,
     ) -> Self {
         LobbyActor {
             receiver,
@@ -261,7 +259,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             game_engine,
             active_lobbies,
             twitch_channel_name,
-            twitch_chat_manager_handle,
+            twitch_service_handle,
             twitch_subscribed: false,
             twitch_status_receiver: None,
             _twitch_message_task_handle: None,
@@ -569,7 +567,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
             );
 
             match self
-                .twitch_chat_manager_handle
+                .twitch_service_handle
                 .subscribe_to_channel(channel_name.clone(), self.lobby_id, tx_for_lobby_messages)
                 .await
             {
@@ -591,7 +589,9 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                                 .await
                                 .is_err()
                             {
-                                tracing::warn!("Failed to send internal Twitch message to self");
+                                tracing::debug!(
+                                    "Lobby shutting down before Twitch message relay finished"
+                                );
                                 break;
                             }
                         }
@@ -612,7 +612,7 @@ impl<G: GameLogic + Send + 'static> LobbyActor<G> {
                                     }
                                     let status = status_receiver_clone.borrow_and_update().clone();
                                      if actor_sender_clone.send(LobbyActorMessage::InternalTwitchStatusUpdate(status)).await.is_err() {
-                                        tracing::warn!("Failed to send internal Twitch status to self");
+                                        tracing::debug!("Lobby shutting down before Twitch status relay finished");
                                         break;
                                     }
                                 }
@@ -690,7 +690,7 @@ pub async fn run_lobby_actor<G: GameLogic + Send + 'static>(
                 "Unsubscribing from Twitch channel"
             );
             if let Err(e) = actor
-                .twitch_chat_manager_handle
+                .twitch_service_handle
                 .unsubscribe_from_channel(channel_name.clone(), actor.lobby_id)
                 .await
             {
@@ -729,7 +729,7 @@ impl LobbyActorHandle {
         active_lobbies: Arc<DashMap<Uuid, LobbyActorHandle>>,
         game_engine_instance: G,
         twitch_channel_name: Option<String>,
-        twitch_chat_manager_handle: TwitchChatManagerActorHandle,
+        twitch_service_handle: TwitchServiceHandle,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
         let actor = LobbyActor::<G>::new(
@@ -738,7 +738,7 @@ impl LobbyActorHandle {
             game_engine_instance,
             active_lobbies,
             twitch_channel_name,
-            twitch_chat_manager_handle,
+            twitch_service_handle,
         );
         tokio::spawn(run_lobby_actor::<G>(actor, sender.clone()));
         Self { sender, lobby_id }
@@ -768,7 +768,10 @@ impl LobbyActorHandle {
             .await
             .is_err()
         {
-            tracing::error!("Failed to send ClientConnected");
+            tracing::debug!(
+                client.id = %client_id,
+                "Lobby actor dropped before ClientConnected message delivered"
+            );
         }
     }
 
@@ -779,7 +782,10 @@ impl LobbyActorHandle {
             .await
             .is_err()
         {
-            tracing::error!("Failed to send ClientDisconnected");
+            tracing::debug!(
+                client.id = %client_id,
+                "Lobby actor dropped before ClientDisconnected message delivered"
+            );
         }
     }
 }
