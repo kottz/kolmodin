@@ -210,15 +210,14 @@ impl QuizGame {
         client_id: &Uuid,
         message: GenericServerToClientMessage,
     ) {
-        if let Some(tx) = self.clients.get(client_id) {
-            if let Ok(ws_msg) = message.to_ws_text() {
-                if tx.send(ws_msg).await.is_err() {
-                    tracing::warn!(
-                        client.id = %client_id,
-                        "Failed to send to client"
-                    );
-                }
-            }
+        if let Some(tx) = self.clients.get(client_id)
+            && let Ok(ws_msg) = message.to_ws_text()
+            && tx.send(ws_msg).await.is_err()
+        {
+            tracing::warn!(
+                client.id = %client_id,
+                "Failed to send to client"
+            );
         }
     }
 
@@ -422,19 +421,19 @@ impl QuizGame {
             let removed_guess = self.recent_guesses.remove(pos);
 
             // Deduct point from player
-            if let Some(current_score) = self.player_scores.get_mut(&removed_guess.player) {
-                if *current_score > 0 {
-                    *current_score -= 1;
+            if let Some(current_score) = self.player_scores.get_mut(&removed_guess.player)
+                && *current_score > 0
+            {
+                *current_score -= 1;
 
-                    tracing::info!(
-                        player = %removed_guess.player,
-                        guess = %removed_guess.guessed_text,
-                        answer = %removed_guess.correct_answer,
-                        question = %removed_guess.question,
-                        new_score = *current_score,
-                        "Removed recent guess and deducted point"
-                    );
-                }
+                tracing::info!(
+                    player = %removed_guess.player,
+                    guess = %removed_guess.guessed_text,
+                    answer = %removed_guess.correct_answer,
+                    question = %removed_guess.question,
+                    new_score = *current_score,
+                    "Removed recent guess and deducted point"
+                );
             }
 
             self.broadcast_game_event_to_all(QuizEvent::RecentGuessesUpdated {
@@ -521,14 +520,14 @@ impl QuizGame {
                 }
                 QuestionSource::VemVetMest(index) => {
                     // Return the Vem Vet Mest question
-                    if let Some(vem_vet_mest_data) = &self.vem_vet_mest_data {
-                        if let Some(question) = vem_vet_mest_data.get(*index) {
-                            return Some((
-                                question.question.clone(),
-                                question.answer.clone(),
-                                question.extra_info.clone(),
-                            ));
-                        }
+                    if let Some(vem_vet_mest_data) = &self.vem_vet_mest_data
+                        && let Some(question) = vem_vet_mest_data.get(*index)
+                    {
+                        return Some((
+                            question.question.clone(),
+                            question.answer.clone(),
+                            question.extra_info.clone(),
+                        ));
                     }
                 }
             }

@@ -40,8 +40,10 @@ fn damerau_levenshtein_threshold(s1: &str, s2: &str, threshold: usize) -> Option
     for (i, row) in dp.iter_mut().enumerate().take(n + 1) {
         row[0] = i; // Cost if s2 is empty
     }
-    for j in 0..=m {
-        dp[0][j] = j; // Cost if s1 is empty
+    if let Some(first_row) = dp.first_mut() {
+        for (j, cell) in first_row.iter_mut().enumerate().take(m + 1) {
+            *cell = j; // Cost if s1 is empty
+        }
     }
     // Correcting initialization if threshold is 0.
     // dp[i][0] should be i, and dp[0][j] should be j.

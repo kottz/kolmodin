@@ -179,15 +179,14 @@ impl MedAndraOrdGame {
         client_id: &Uuid,
         message: GenericServerToClientMessage,
     ) {
-        if let Some(tx) = self.clients.get(client_id) {
-            if let Ok(ws_msg) = message.to_ws_text() {
-                if tx.send(ws_msg).await.is_err() {
-                    tracing::warn!(
-                        client.id = %client_id,
-                        "Failed to send to client"
-                    );
-                }
-            }
+        if let Some(tx) = self.clients.get(client_id)
+            && let Ok(ws_msg) = message.to_ws_text()
+            && tx.send(ws_msg).await.is_err()
+        {
+            tracing::warn!(
+                client.id = %client_id,
+                "Failed to send to client"
+            );
         }
     }
 
@@ -375,18 +374,18 @@ impl MedAndraOrdGame {
             let removed_guess = self.recent_guesses.remove(pos);
 
             // Deduct point from player
-            if let Some(current_score) = self.player_scores.get_mut(&removed_guess.player) {
-                if *current_score > 0 {
-                    *current_score -= 1;
+            if let Some(current_score) = self.player_scores.get_mut(&removed_guess.player)
+                && *current_score > 0
+            {
+                *current_score -= 1;
 
-                    tracing::info!(
-                        player = %removed_guess.player,
-                        guess = %removed_guess.guessed_text,
-                        word = %removed_guess.correct_word,
-                        new_score = *current_score,
-                        "Removed recent guess and deducted point"
-                    );
-                }
+                tracing::info!(
+                    player = %removed_guess.player,
+                    guess = %removed_guess.guessed_text,
+                    word = %removed_guess.correct_word,
+                    new_score = *current_score,
+                    "Removed recent guess and deducted point"
+                );
             }
 
             self.broadcast_game_event_to_all(MedAndraOrdEvent::RecentGuessesUpdated {

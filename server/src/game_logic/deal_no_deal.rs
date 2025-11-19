@@ -567,7 +567,6 @@ impl DealNoDealGame {
                         self.current_votes_by_user.clear();
                     } else if self.current_round_schedule_index >= ROUND_SCHEDULE.len() {
                         self.end_game_no_deal_final_case().await;
-                        return;
                     } else {
                         let next_display_r_num = round_number + 1;
                         let cases_to_open_next_round = ROUND_SCHEDULE
@@ -594,7 +593,6 @@ impl DealNoDealGame {
                             self.current_votes_by_user.clear();
                         } else {
                             self.end_game_no_deal_final_case().await;
-                            return;
                         }
                     }
                 }
@@ -750,19 +748,19 @@ impl DealNoDealGame {
     ) -> (bool, Option<String>) {
         match current_game_phase {
             GamePhase::PlayerCaseSelectionVoting | GamePhase::RoundCaseOpeningVoting { .. } => {
-                if let Ok(case_id_1_based) = vote_text.parse::<u8>() {
-                    if (1..=TOTAL_CASES).contains(&case_id_1_based) {
-                        let case_idx_0_based = (case_id_1_based - 1) as usize;
-                        let is_player_sel_phase =
-                            matches!(current_game_phase, GamePhase::PlayerCaseSelectionVoting);
+                if let Ok(case_id_1_based) = vote_text.parse::<u8>()
+                    && (1..=TOTAL_CASES).contains(&case_id_1_based)
+                {
+                    let case_idx_0_based = (case_id_1_based - 1) as usize;
+                    let is_player_sel_phase =
+                        matches!(current_game_phase, GamePhase::PlayerCaseSelectionVoting);
 
-                        if case_idx_0_based < self.briefcase_is_opened.len()
-                            && !self.briefcase_is_opened[case_idx_0_based]
-                            && (is_player_sel_phase
-                                || Some(case_idx_0_based) != self.player_chosen_case_index)
-                        {
-                            return (true, Some(case_id_1_based.to_string()));
-                        }
+                    if case_idx_0_based < self.briefcase_is_opened.len()
+                        && !self.briefcase_is_opened[case_idx_0_based]
+                        && (is_player_sel_phase
+                            || Some(case_idx_0_based) != self.player_chosen_case_index)
+                    {
+                        return (true, Some(case_id_1_based.to_string()));
                     }
                 }
             }
@@ -870,19 +868,19 @@ impl GameLogic for DealNoDealGame {
         let (is_valid, parsed_vote_value_opt) =
             self.validate_and_parse_twitch_vote(message.text.trim(), &current_phase_clone);
 
-        if is_valid {
-            if let Some(vote_value_str) = parsed_vote_value_opt {
-                let voter_username = message.sender_username;
+        if is_valid
+            && let Some(vote_value_str) = parsed_vote_value_opt
+        {
+            let voter_username = message.sender_username;
 
-                self.current_votes_by_user
-                    .insert(voter_username.clone(), vote_value_str.clone());
+            self.current_votes_by_user
+                .insert(voter_username.clone(), vote_value_str.clone());
 
-                self.broadcast_game_event_to_all_admins(GameEvent::PlayerVoteRegistered {
-                    voter_username,
-                    vote_value: vote_value_str,
-                })
-                .await;
-            }
+            self.broadcast_game_event_to_all_admins(GameEvent::PlayerVoteRegistered {
+                voter_username,
+                vote_value: vote_value_str,
+            })
+            .await;
         }
     }
 

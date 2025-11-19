@@ -326,7 +326,6 @@ impl TwitchChannelActor {
                         "IRC loop exited and no subscribers. Actor shutting down"
                     );
                     self.initiate_actor_shutdown(true).await;
-                    return;
                 } else {
                     tracing::debug!(
                         channel.name = %self.channel_name,
