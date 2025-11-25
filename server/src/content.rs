@@ -40,13 +40,13 @@ pub struct VemVetMestQuestion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KolmodinData {
     pub twitch_whitelist: Vec<String>,
-    pub medandraord_words: Vec<String>,
 }
 
 // Root data structure matching the JSON schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonGameContentSnapshot {
     pub kolmodin: KolmodinData,
+    pub medandraord_words: Vec<String>,
     pub trivial_pursuit: TrivialPursuitData,
     pub vem_vet_mest: Vec<VemVetMestQuestion>,
 }
@@ -80,7 +80,6 @@ impl GameContentParser {
                 .filter(|s| !s.is_empty())
                 .collect(),
             medandraord_words: json_data
-                .kolmodin
                 .medandraord_words
                 .into_iter()
                 .map(|s| s.trim().to_string())
@@ -282,9 +281,9 @@ mod tests {
     fn test_parse_json_data() {
         let content = r#"{
   "kolmodin": {
-    "twitch_whitelist": ["testchannel", "example_user"],
-    "medandraord_words": ["word1", "word2", "word3"]
+    "twitch_whitelist": ["testchannel", "example_user"]
   },
+  "medandraord_words": ["word1", "word2", "word3"],
   "trivial_pursuit": {
     "cards": [
       {
