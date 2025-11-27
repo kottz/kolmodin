@@ -1,10 +1,5 @@
 # 👾 Kolmodin
-
-An interactive multiplayer game suite where your Twitch chat plays along in real time.
-
-## How to Play
-
-Run Kolmodin while streaming on Twitch. Open the web UI, choose a game mode, and enter the channel to listen to. The backend connects to Twitch IRC; viewers play by chatting. The host starts rounds and drives the flow.
+Kolmodin is an application used to play games through Twitch chat. It supports multiple different game modes. The streamer shows the Kolmodin UI on stream and the viewers participate by typing in the chat.
 
 ## Current Games
 
@@ -24,7 +19,7 @@ cp env.example .env
 cargo run --release
 ```
 
-See `env.example` for Twitch credentials, data source settings, game toggles, and the optional YouTube key for Clip Queue.
+See `env.example` for configuration options.
 
 ### Frontend Setup
 
@@ -37,8 +32,8 @@ npm run dev -- --host    # Development
 npm run build            # Production
 ```
 
-Point the public API/WS URLs at wherever the Rust server is running (see `env.example`).
+See `env.example` for configuration options.
 
 ### Creating Custom Questions
 
-Set the backend data source in `.env` (file path or HTTP URL). See `server/kolmodin_data_example.json` for an example file. Use `GET /api/refresh-words` with the admin API key to reload updated data without restarting.
+The server expects a json file with whitelisted channels and question data. See `server/kolmodin_data_example.json` for the correct structure. The server can load this file from file or through HTTP URL. Use `GET /api/refresh-words` with the admin API key to reload updated data without restarting.
